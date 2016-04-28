@@ -22,7 +22,8 @@ var URI_REGEX = RegExp.escape(BASE_URI) +
 var sshport  = 22;
 var sshhosts = {
   oakley: 'oakley.osc.edu',
-  ruby:   'ruby.osc.edu'
+  ruby:   'ruby.osc.edu',
+  dev:    'websvcs08.osc.edu'
 };
 var default_host = 'oakley';
 
@@ -84,11 +85,26 @@ io.on('connection', function(socket) {
   }
 
   // launch an ssh session
-  var term = pty.spawn('ssh', term_args, {
-    name: 'xterm-256color',
-    cols: 80,
-    rows: 30
-  });
+  var term = (function(){
+    if(sshhost === 'websvcs08.osc.edu'){
+      return pty.spawn('scl', ['enable', 'git19', 'bash -l'], {
+        name: 'xterm-256color',
+        cols: 80,
+        rows: 30,
+
+        // this is where we add a GET PARAM to specify to cd to the particular directory
+        cwd: cwd || process.env.HOME
+      });
+    }
+    else{
+      return pty.spawn('ssh', term_args, {
+        name: 'xterm-256color',
+        cols: 80,
+        rows: 30
+      });
+    }
+  })();
+
   console.log((new Date()) + " PID=" + term.pid + " STARTED on behalf of user");
 
   term.on('data', function(data) {
