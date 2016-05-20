@@ -38,6 +38,10 @@ app.set('view engine', 'handlebars');
 app.get(BASE_URI + SSH_URI + '/*', function(req, res) {
   res.render('index', {
     baseURI: BASE_URI
+    // FIXME: we could provide an alternate menu
+    // that will let you switch color schemes/themes on the fly
+    // or add new ones (actually just drop in "themes" in a directory and
+    // restart to make them available :-P)
   });
 });
 app.use(BASE_URI + '/wetty', express.static(path.join(__dirname, 'node_modules/wetty/public/wetty')));
@@ -105,6 +109,29 @@ io.on('connection', function(socket) {
     }
   })();
 
+  // FIXME: set terminal colors solarized:
+  // term.prefs_.set()
+
+  // Disable bold.
+  // term.prefs_.set('enable-bold', false);
+  //
+  // // Use this for Solarized Dark
+  //
+  // term.prefs_.set('background-color', "#002B36");
+  // term.prefs_.set('foreground-color', "#839496");
+
+  //
+  // // Use this for Solarized Light
+  // term.prefs_.set('background-color', "#fdf6e3");
+  // term.prefs_.set('foreground-color', "#657b83");
+  //
+  // // And of course you can adjust the font-family, font-size, font-
+  // // smoothing values to your liking.  I use this:
+  // term.prefs_.set('font-family', 'Menlo')
+  // term.prefs_.set('font-size', 12)
+  // term.prefs_.set('font-smoothing', 'subpixel-antialiased')
+
+
   console.log((new Date()) + " PID=" + term.pid + " STARTED on behalf of user");
 
   term.on('data', function(data) {
@@ -123,4 +150,8 @@ io.on('connection', function(socket) {
   socket.on('disconnect', function() {
     term.end();
   });
+
+  // app.get(BASE_URI + '/foo', function(req, res) {
+  //   res.send(term.pid);
+  // });
 });
