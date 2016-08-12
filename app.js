@@ -23,7 +23,7 @@ var sshport  = 22;
 var sshhosts = {
   oakley: 'oakley.osc.edu',
   ruby:   'ruby.osc.edu',
-  dev:    'websvcs08.osc.edu'
+  dev:    'dev' // open on same server
 };
 var default_host = 'oakley';
 
@@ -86,8 +86,8 @@ io.on('connection', function(socket) {
 
   // launch an ssh session
   var term = (function(){
-    if(sshhost === 'websvcs08.osc.edu'){
-      return pty.spawn('scl', ['enable', 'git19', 'bash -l'], {
+    if(sshhost === 'dev'){
+      return pty.spawn('scl', ['enable', 'git19', 'python27','bash -l'], {
         name: 'xterm-256color',
         cols: 80,
         rows: 30,
