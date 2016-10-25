@@ -7,7 +7,7 @@ This app is a Node.js app for Open OnDemand providing a web based terminal using
 1.  Clone repo to local directory
 
     ```
-    git clone git@github.com:OSC/osc-shell.git shell
+    git clone https://github.com/OSC/osc-shell.git shell
     ```
 
 2.  Due to limitations in Node.js installed through RedHat Software Collections,
