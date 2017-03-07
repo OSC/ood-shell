@@ -19,7 +19,6 @@
     "osc"
   ],
   "dependencies": {
-    "base-uri": "^1.0.1",
     "dotenv": "^4.0.0",
     "express-handlebars": "^3.0.0",
     "express": "^3.5.0",
