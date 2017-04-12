@@ -14,7 +14,7 @@ var server   = require('socket.io');
 var pty      = require('pty.js');
 var fs       = require('fs');
 
-var BASE_URI  = require('base-uri');
+var BASE_URI = process.env.PASSENGER_BASE_URI || '/'
 var SSH_URI   = "/ssh"
 var PORT      = 1337;
 var URI_REGEX = RegExp.escape(BASE_URI) +
