@@ -5,7 +5,7 @@ var http      = require('http');
 var path      = require('path');
 var WebSocket = require('ws');
 var express   = require('express');
-var pty       = require('pty.js');
+var pty       = require('node-pty');
 var hbs       = require('hbs');
 var port      = 3000;
 
