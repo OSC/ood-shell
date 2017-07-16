@@ -21,6 +21,10 @@
       // use proper headers for xhr (doesn't work due to socket.io)
       opts.extraHeaders = {'X-Requested-With': 'XMLHttpRequest'};
 
+      // use polling for safari: omit websockets
+      // ONLY DO THIS IF YOU KNOW WEBSOCKETS WILL NOT WORK
+      opts.transports = ['polling']
+
       return _io(uri, opts);
     }
 
