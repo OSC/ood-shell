@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Update `bin/setup` to remove `node-modules` instead of relying on `npm prune`
+
 ## [1.3.0] - 2017-12-21
 ### Added
 - Added support to read local environment variable file `.env.local`.
