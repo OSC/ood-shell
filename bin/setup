@@ -53,7 +53,7 @@ chdir APP_ROOT do
   puts "DEFAULT_SSHHOST = #{DEFAULT_SSHHOST || OLD_SSHHOST || "localhost"}"
 
   puts "\n== Installing dependencies =="
-  sh "rm -rf node_modules"
+  rm_rf "node_modules"
   sh "npm install"
 
   if DEFAULT_SSHHOST && DEFAULT_SSHHOST != OLD_SSHHOST
