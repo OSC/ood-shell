@@ -55,57 +55,62 @@ function OodShell(element, url, prefs) {
   this.term    = null;
 }
 
+/**
+ * Create the terminal. The constructor for the OodShell class is mostly just a data object. This function
+ * does the actual work of initializing the hterm.Terminal, the websocket (through a callback *after* the 
+ * terminal is ready.) and setting preferences, etc.
+ */
 OodShell.prototype.createTerminal = function () {
-  if(lib.resource.get('hterm/changelog/version', null).data === '1.84') {
-    this.socket = new WebSocket(this.url);
-    this.socket.onopen    = this.runTerminal.bind(this);
-    this.socket.onmessage = this.getMessage.bind(this);
-    this.socket.onclose   = this.closeTerminal.bind(this);
+  if(lib.resource.get('hterm/changelog/version', null).data === '1.85') {
+    
+    // Set backing store that hterm uses to read/write preferences
+    hterm.defaultStorage = new lib.Storage.Memory();
+    
+    // Create an instance of hterm.Terminal
+    this.term = new hterm.Terminal();
+    
+    var that = this;
+    
+    // Handler that fires when terminal is initialized and ready for use
+    this.term.onTerminalReady = function () {
+      // Create a new terminal IO object and give it the foreground.
+      // (The default IO object just prints warning messages about unhandled
+      // things to the JS console.)
+      var io = this.io.push();
+
+      // Set up event handlers for io
+      io.onVTKeystroke    = that.onVTKeystroke.bind(that);
+      io.sendString       = that.sendString.bind(that);
+      io.onTerminalResize = that.onTerminalResize.bind(that);
+
+      that.socket = new WebSocket(that.url);  // WS isn't made or bound until terminal is ready
+      //that.socket.onopen    = nothing, onopen callback bc the WS is the last thing to init
+      that.socket.onmessage = that.getMessage.bind(that);
+      that.socket.onclose   = that.closeTerminal.bind(that);
+    
+      // Capture all keyboard input
+      this.installKeyboard();
+    };
+  
+    // Patch cursor setting
+    this.term.options_.cursorVisible = true;
+  
+    // Connect terminal to sacrificial DOM node
+    this.term.decorate(this.element);
+    
+    // Set preferences for terminal
+    for (var k in this.prefs) {
+      this.term.prefs_.set(k, this.prefs[k]);
+    }
+    
+    // Warn user if he/she unloads page
+    window.onbeforeunload = function() {
+      return 'Leaving this page will terminate your terminal session.';
+    };
+  
   } else {
     document.getElementById('terminal').innerHTML = 'WARNING: version of hterm has changed. Please review ood_shell.js to ensure that the override of hterm.Terminal.prototype.copyStringToClipboard is still an appropriate fix to copy on select in Firefox.';
   }
-};
-
-OodShell.prototype.runTerminal = function () {
-  var that = this;
-
-  // Set backing store that hterm uses to read/write preferences
-  hterm.defaultStorage = new lib.Storage.Memory();
-
-  // Create an instance of hterm.Terminal
-  this.term = new hterm.Terminal();
-
-  // Set preferences for terminal
-  for (var k in this.prefs) {
-    this.term.prefs_.set(k, this.prefs[k]);
-  }
-
-  // Handler that fires when terminal is initialized and ready for use
-  this.term.onTerminalReady = function () {
-    // Create a new terminal IO object and give it the foreground.
-    // (The default IO object just prints warning messages about unhandled
-    // things to the JS console.)
-    var io = this.io.push();
-
-    // Set up event handlers for io
-    io.onVTKeystroke    = that.onVTKeystroke.bind(that);
-    io.sendString       = that.sendString.bind(that);
-    io.onTerminalResize = that.onTerminalResize.bind(that);
-
-    // Capture all keyboard input
-    this.installKeyboard();
-  };
-  
-  // Patch cursor setting
-  this.term.options_.cursorVisible = true;
-
-  // Connect terminal to sacrificial DOM node
-  this.term.decorate(this.element);
-
-  // Warn user if he/she unloads page
-  window.onbeforeunload = function() {
-    return 'Leaving this page will terminate your terminal session.';
-  };
 };
 
 OodShell.prototype.getMessage = function (ev) {
@@ -148,10 +153,17 @@ OodShell.prototype.onTerminalResize = function (columns, rows) {
   // React to size changes here.
   // Secure Shell pokes at NaCl, which eventually results in
   // some ioctls on the host.
-  this.socket.send(JSON.stringify({
-    resize: {
-      cols: columns,
-      rows: rows
-    }
-  }));
+  
+  // iff the socket is ready. race condition in FF where we try to resize before the socket is open
+  if(this.socket.readyState == 1){ 
+    this.socket.send(JSON.stringify({
+      resize: {
+        cols: columns,
+        rows: rows
+      }
+    }));
+  }else{
+      setTimeout(this.onTerminalResize(columns, rows), 100); // try again in 100 ms bc we have to resize
+  }
+
 };

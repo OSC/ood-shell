@@ -16,7 +16,8 @@
 // libdot/js/lib_storage_chrome.js
 // libdot/js/lib_storage_local.js
 // libdot/js/lib_storage_memory.js
-// libdot/js/lib_utf8.js
+// libdot/third_party/fast-text-encoding/text.js
+// libdot/third_party/intl-segmenter/intl-segmenter.js
 // libdot/third_party/wcwidth/lib_wc.js
 
 'use strict';
@@ -26,18 +27,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-if (typeof lib != 'undefined')
-  throw new Error('Global "lib" object already exists.');
+const lib = {};
 
-var lib = {};
-
-/**
- * Map of "dependency" to ["source", ...].
- *
- * Each dependency is a object name, like "lib.fs", "source" is the url that
- * depends on the object.
- */
-lib.runtimeDependencies_ = {};
+// Export for node environments.
+if (typeof exports !== 'undefined') {
+  module.exports = lib;
+}
 
 /**
  * List of functions that need to be invoked during library initialization.
@@ -47,86 +42,6 @@ lib.runtimeDependencies_ = {};
  * for debugging.  Element 1 is the callback function.
  */
 lib.initCallbacks_ = [];
-
-/**
- * Records a runtime dependency.
- *
- * This can be useful when you want to express a run-time dependency at
- * compile time.  It is not intended to be a full-fledged library system or
- * dependency tracker.  It's just there to make it possible to debug the
- * deps without running all the code.
- *
- * Object names are specified as strings.  For example...
- *
- *     lib.rtdep('lib.colors', 'lib.PreferenceManager');
- *
- * Object names need not be rooted by 'lib'.  You may use this to declare a
- * dependency on any object.
- *
- * The client program may call lib.ensureRuntimeDependencies() at startup in
- * order to ensure that all runtime dependencies have been met.
- *
- * @param {string} var_args One or more objects specified as strings.
- */
-lib.rtdep = function(var_args) {
-  var source;
-
-  try {
-    throw new Error();
-  } catch (ex) {
-    var stackArray = ex.stack.split('\n');
-    // In Safari, the resulting stackArray will only have 2 elements and the
-    // individual strings are formatted differently.
-    if (stackArray.length >= 3) {
-      source = stackArray[2].replace(/^\s*at\s+/, '');
-    } else {
-      source = stackArray[1].replace(/^\s*global code@/, '');
-    }
-  }
-
-  for (var i = 0; i < arguments.length; i++) {
-    var path = arguments[i];
-    if (path instanceof Array) {
-      lib.rtdep.apply(lib, path);
-    } else {
-      var ary = this.runtimeDependencies_[path];
-      if (!ary)
-        ary = this.runtimeDependencies_[path] = [];
-      ary.push(source);
-    }
-  }
-};
-
-/**
- * Ensures that all runtime dependencies are met, or an exception is thrown.
- *
- * Every unmet runtime dependency will be logged to the JS console.  If at
- * least one dependency is unmet this will raise an exception.
- */
-lib.ensureRuntimeDependencies_ = function() {
-  var passed = true;
-
-  for (var path in lib.runtimeDependencies_) {
-    var sourceList = lib.runtimeDependencies_[path];
-    var names = path.split('.');
-
-    // In a document context 'window' is the global object.  In a worker it's
-    // called 'self'.
-    var obj = (window || self);
-    for (var i = 0; i < names.length; i++) {
-      if (!(names[i] in obj)) {
-        console.warn('Missing "' + path + '" is needed by', sourceList);
-        passed = false;
-        break;
-      }
-
-      obj = obj[names[i]];
-    }
-  }
-
-  if (!passed)
-    throw new Error('Failed runtime dependency check');
-};
 
 /**
  * Register an initialization function.
@@ -167,7 +82,7 @@ lib.init = function(onInit, opt_logFunction) {
       var rec = ary.shift();
       if (opt_logFunction)
         opt_logFunction('init: ' + rec[0]);
-      rec[1](lib.f.alarm(initNext));
+      rec[1](initNext);
     } else {
       onInit();
     }
@@ -175,8 +90,6 @@ lib.init = function(onInit, opt_logFunction) {
 
   if (typeof onInit != 'function')
     throw new Error('Missing or invalid argument: onInit');
-
-  lib.ensureRuntimeDependencies_();
 
   setTimeout(initNext, 0);
 };
@@ -309,36 +222,6 @@ if (typeof Promise.prototype.finally !== 'function') {
 lib.array = {};
 
 /**
- * Convert an array of four unsigned bytes into an unsigned 32-bit integer (big
- * endian).
- *
- * @param {!Array.<!number>} array
- * @returns {!number}
- */
-lib.array.arrayBigEndianToUint32 = function(array) {
-  const maybeSigned =
-      (array[0] << 24) | (array[1] << 16) | (array[2] << 8) | (array[3] << 0);
-  // Interpret the result of the bit operations as an unsigned integer.
-  return maybeSigned >>> 0;
-};
-
-/**
- * Convert an unsigned 32-bit integer into an array of four unsigned bytes (big
- * endian).
- *
- * @param {!number} uint32
- * @returns {!Array.<!number>}
- */
-lib.array.uint32ToArrayBigEndian = function(uint32) {
-  return [
-    (uint32 >>> 24) & 0xFF,
-    (uint32 >>> 16) & 0xFF,
-    (uint32 >>> 8) & 0xFF,
-    (uint32 >>> 0) & 0xFF,
-  ];
-};
-
-/**
  * Concatenate an arbitrary number of typed arrays of the same type into a new
  * typed array of this type.
  *
@@ -406,6 +289,11 @@ lib.codec = {};
  */
 lib.codec.codeUnitArrayToString = function(array) {
   // String concat is faster than Array.join.
+  //
+  // String.fromCharCode.apply is faster than this if called less frequently
+  // and with smaller array sizes (like <32K).  But it's a recursive call so
+  // larger arrays will blow the stack and fail.  We also seem to be faster
+  // (or at least more constant time) when called frequently.
   let ret = '';
   for (let i = 0; i < array.length; ++i) {
     ret += String.fromCharCode(array[i]);
@@ -748,14 +636,14 @@ lib.colors.crackRGB = function(color) {
     var ary = color.match(lib.colors.re_.rgba);
     if (ary) {
       ary.shift();
-      return ary;
+      return Array.from(ary);
     }
   } else {
     var ary = color.match(lib.colors.re_.rgb);
     if (ary) {
       ary.shift();
       ary.push('1');
-      return ary;
+      return Array.from(ary);
     }
   }
 
@@ -1529,20 +1417,6 @@ lib.colors.colorNames = {
 lib.f = {};
 
 /**
- * Create a unique enum value.
- *
- * @suppress {lintChecks}
- * @param {string} name A human friendly name for debugging.
- * @return {Object} A unique enum that won't compare equal to anything else.
- */
-lib.f.createEnum = function(name) {
-  // We use a String object as nothing else should be using them -- we want to
-  // use string primitives normally.  But debuggers will include our name.
-  // eslint-disable-next-line no-new-wrappers
-  return new String(name);
-};
-
-/**
  * Replace variable references in a string.
  *
  * Variables are of the form %FUNCTION(VARNAME).  FUNCTION is an optional
@@ -1591,49 +1465,6 @@ lib.f.replaceVars.functions = {
 
     return str.replace(/[<>&\"\']/g, (m) => map[m]);
   }
-};
-
-/**
- * Parse a query string into a hash.
- *
- * This takes a url query string in the form 'name1=value&name2=value' and
- * converts it into an object of the form { name1: 'value', name2: 'value' }.
- * If a given name appears multiple times in the query string, only the
- * last value will appear in the result.  If the name ends with [], it is
- * turned into an array.
- *
- * Names and values are passed through decodeURIComponent before being added
- * to the result object.
- *
- * @param {string} queryString The string to parse.  If it starts with a
- *     leading '?', the '?' will be ignored.
- */
-lib.f.parseQuery = function(queryString) {
-  if (queryString.startsWith('?'))
-    queryString = queryString.substr(1);
-
-  var rv = {};
-
-  var pairs = queryString.split('&');
-  for (var i = 0; i < pairs.length; i++) {
-    var pair = pairs[i].split('=');
-    let key = decodeURIComponent(pair[0]);
-    let val = decodeURIComponent(pair[1]);
-
-    if (key.endsWith('[]')) {
-      // It's an array.
-      key = key.slice(0, -2);
-      // The key doesn't exist, or wasn't an array before.
-      if (!(rv[key] instanceof Array))
-        rv[key] = [];
-      rv[key].push(val);
-    } else {
-      // It's a plain string.
-      rv[key] = val;
-    }
-  }
-
-  return rv;
 };
 
 lib.f.getURL = function(path) {
@@ -1696,71 +1527,6 @@ lib.f.getWhitespace = function(length) {
   }
 
   return f.whitespace.substr(0, length);
-};
-
- /**
- * Ensure that a function is called within a certain time limit.
- *
- * Simple usage looks like this...
- *
- *  lib.registerInit(lib.f.alarm(onInit));
- *
- * This will log a warning to the console if onInit() is not invoked within
- * 5 seconds.
- *
- * If you're performing some operation that may take longer than 5 seconds you
- * can pass a duration in milliseconds as the optional second parameter.
- *
- * If you pass a string identifier instead of a callback function, you'll get a
- * wrapper generator rather than a single wrapper.  Each call to the
- * generator will return a wrapped version of the callback wired to
- * a shared timeout.  This is for cases where you want to ensure that at least
- * one of a set of callbacks is invoked before a timeout expires.
- *
- *   var alarm = lib.f.alarm('fetch object');
- *   lib.foo.fetchObject(alarm(onSuccess), alarm(onFailure));
- *
- * @param {function(*)} callback The function to wrap in an alarm.
- * @param {int} opt_ms Optional number of milliseconds to wait before raising
- *     an alarm.  Default is 5000 (5 seconds).
- * @return {function} If callback is a function then the return value will be
- *     the wrapped callback.  If callback is a string then the return value will
- *     be a function that generates new wrapped callbacks.
- */
-lib.f.alarm = function(callback, opt_ms) {
-  var ms = opt_ms || 5 * 1000;
-  var stack = lib.f.getStack(1);
-
-  return (function() {
-    // This outer function is called immediately.  It's here to capture a new
-    // scope for the timeout variable.
-
-    // The 'timeout' variable is shared by this timeout function, and the
-    // callback wrapper.
-    var timeout = setTimeout(function() {
-      var name = (typeof callback == 'string') ? name : callback.name;
-      name = name ? (': ' + name) : '';
-      console.warn('lib.f.alarm: timeout expired: ' + (ms / 1000) + 's' + name);
-      console.log(stack);
-      timeout = null;
-    }, ms);
-
-    var wrapperGenerator = function(callback) {
-      return function() {
-        if (timeout) {
-          clearTimeout(timeout);
-          timeout = null;
-        }
-
-        return callback.apply(null, arguments);
-      };
-    };
-
-    if (typeof callback == 'string')
-      return wrapperGenerator;
-
-    return wrapperGenerator(callback);
-  })();
 };
 
 /**
@@ -1868,6 +1634,11 @@ lib.f.getOs = function() {
       return Promise.resolve('android');
     else if (ua.includes('Windows'))
       return Promise.resolve('windows');
+  }
+
+  // Probe node environment.
+  if (typeof process != 'undefined') {
+    return Promise.resolve('node');
   }
 
   // Still here?  No idea.
@@ -2307,7 +2078,7 @@ lib.PreferenceManager = function(storage, opt_prefix) {
  *
  * Equality tests against this value MUST use '===' or '!==' to be accurate.
  */
-lib.PreferenceManager.prototype.DEFAULT_VALUE = lib.f.createEnum('DEFAULT');
+lib.PreferenceManager.prototype.DEFAULT_VALUE = Symbol('DEFAULT_VALUE');
 
 /**
  * An individual preference.
@@ -3712,174 +3483,419 @@ lib.Storage.Memory.prototype.removeItems = function(ary, opt_callback) {
   if (opt_callback)
   setTimeout(opt_callback, 0);
 };
-// SOURCE FILE: libdot/js/lib_utf8.js
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
-
-// TODO(davidben): When the string encoding API is implemented,
-// replace this with the native in-browser implementation.
-//
-// https://wiki.whatwg.org/wiki/StringEncoding
-// https://encoding.spec.whatwg.org/
-
-/**
- * A stateful UTF-8 decoder.
- */
-lib.UTF8Decoder = function() {
-  // The number of bytes left in the current sequence.
-  this.bytesLeft = 0;
-  // The in-progress code point being decoded, if bytesLeft > 0.
-  this.codePoint = 0;
-  // The lower bound on the final code point, if bytesLeft > 0.
-  this.lowerBound = 0;
-};
-
-/**
- * Decodes a some UTF-8 data, taking into account state from previous
- * data streamed through the encoder.
+// SOURCE FILE: libdot/third_party/fast-text-encoding/text.js
+/*
+ * Copyright 2017 Sam Thorogood. All rights reserved.
  *
- * @param {String} str data to decode, represented as a JavaScript
- *     String with each code unit representing a byte between 0x00 to
- *     0xFF.
- * @return {String} The data decoded into a JavaScript UTF-16 string.
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ *     https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
  */
-lib.UTF8Decoder.prototype.decode = function(str) {
-  var ret = '';
-  for (var i = 0; i < str.length; i++) {
-    var c = str.charCodeAt(i);
-    if (this.bytesLeft == 0) {
-      if (c <= 0x7F) {
-        ret += str.charAt(i);
-      } else if (0xC0 <= c && c <= 0xDF) {
-        this.codePoint = c - 0xC0;
-        this.bytesLeft = 1;
-        this.lowerBound = 0x80;
-      } else if (0xE0 <= c && c <= 0xEF) {
-        this.codePoint = c - 0xE0;
-        this.bytesLeft = 2;
-        this.lowerBound = 0x800;
-      } else if (0xF0 <= c && c <= 0xF7) {
-        this.codePoint = c - 0xF0;
-        this.bytesLeft = 3;
-        this.lowerBound = 0x10000;
-      } else if (0xF8 <= c && c <= 0xFB) {
-        this.codePoint = c - 0xF8;
-        this.bytesLeft = 4;
-        this.lowerBound = 0x200000;
-      } else if (0xFC <= c && c <= 0xFD) {
-        this.codePoint = c - 0xFC;
-        this.bytesLeft = 5;
-        this.lowerBound = 0x4000000;
-      } else {
-        ret += '\ufffd';
+
+/**
+ * @fileoverview Polyfill for TextEncoder and TextDecoder.
+ *
+ * You probably want `text.min.js`, and not this file directly.
+ */
+
+(function(scope) {
+'use strict';
+
+// fail early
+if (scope['TextEncoder'] && scope['TextDecoder']) {
+  return false;
+}
+
+/**
+ * @constructor
+ * @param {string=} utfLabel
+ */
+function FastTextEncoder(utfLabel='utf-8') {
+  if (utfLabel !== 'utf-8') {
+    throw new RangeError(
+      `Failed to construct 'TextEncoder': The encoding label provided ('${utfLabel}') is invalid.`);
+  }
+}
+
+Object.defineProperty(FastTextEncoder.prototype, 'encoding', {value: 'utf-8'});
+
+/**
+ * @param {string} string
+ * @param {{stream: boolean}=} options
+ * @return {!Uint8Array}
+ */
+FastTextEncoder.prototype.encode = function(string, options={stream: false}) {
+  if (options.stream) {
+    throw new Error(`Failed to encode: the 'stream' option is unsupported.`);
+  }
+
+  let pos = 0;
+  const len = string.length;
+  const out = [];
+
+  let at = 0;  // output position
+  let tlen = Math.max(32, len + (len >> 1) + 7);  // 1.5x size
+  let target = new Uint8Array((tlen >> 3) << 3);  // ... but at 8 byte offset
+
+  while (pos < len) {
+    let value = string.charCodeAt(pos++);
+    if (value >= 0xd800 && value <= 0xdbff) {
+      // high surrogate
+      if (pos < len) {
+        const extra = string.charCodeAt(pos);
+        if ((extra & 0xfc00) === 0xdc00) {
+          ++pos;
+          value = ((value & 0x3ff) << 10) + (extra & 0x3ff) + 0x10000;
+        }
+      }
+      if (value >= 0xd800 && value <= 0xdbff) {
+        continue;  // drop lone surrogate
+      }
+    }
+
+    // expand the buffer if we couldn't write 4 bytes
+    if (at + 4 > target.length) {
+      tlen += 8;  // minimum extra
+      tlen *= (1.0 + (pos / string.length) * 2);  // take 2x the remaining
+      tlen = (tlen >> 3) << 3;  // 8 byte offset
+
+      const update = new Uint8Array(tlen);
+      update.set(target);
+      target = update;
+    }
+
+    if ((value & 0xffffff80) === 0) {  // 1-byte
+      target[at++] = value;  // ASCII
+      continue;
+    } else if ((value & 0xfffff800) === 0) {  // 2-byte
+      target[at++] = ((value >>  6) & 0x1f) | 0xc0;
+    } else if ((value & 0xffff0000) === 0) {  // 3-byte
+      target[at++] = ((value >> 12) & 0x0f) | 0xe0;
+      target[at++] = ((value >>  6) & 0x3f) | 0x80;
+    } else if ((value & 0xffe00000) === 0) {  // 4-byte
+      target[at++] = ((value >> 18) & 0x07) | 0xf0;
+      target[at++] = ((value >> 12) & 0x3f) | 0x80;
+      target[at++] = ((value >>  6) & 0x3f) | 0x80;
+    } else {
+      // FIXME: do we care
+      continue;
+    }
+
+    target[at++] = (value & 0x3f) | 0x80;
+  }
+
+  return target.slice(0, at);
+}
+
+/**
+ * @constructor
+ * @param {string=} utfLabel
+ * @param {{fatal: boolean}=} options
+ */
+function FastTextDecoder(utfLabel='utf-8', options={fatal: false}) {
+  if (utfLabel !== 'utf-8') {
+    throw new RangeError(
+      `Failed to construct 'TextDecoder': The encoding label provided ('${utfLabel}') is invalid.`);
+  }
+  if (options.fatal) {
+    throw new Error(`Failed to construct 'TextDecoder': the 'fatal' option is unsupported.`);
+  }
+}
+
+Object.defineProperty(FastTextDecoder.prototype, 'encoding', {value: 'utf-8'});
+
+Object.defineProperty(FastTextDecoder.prototype, 'fatal', {value: false});
+
+Object.defineProperty(FastTextDecoder.prototype, 'ignoreBOM', {value: false});
+
+/**
+ * @param {(!ArrayBuffer|!ArrayBufferView)} buffer
+ * @param {{stream: boolean}=} options
+ */
+FastTextDecoder.prototype.decode = function(buffer, options={stream: false}) {
+  if (options['stream']) {
+    throw new Error(`Failed to decode: the 'stream' option is unsupported.`);
+  }
+
+  const bytes = new Uint8Array(buffer);
+  let pos = 0;
+  const len = bytes.length;
+  const out = [];
+
+  while (pos < len) {
+    const byte1 = bytes[pos++];
+    if (byte1 === 0) {
+      break;  // NULL
+    }
+
+    if ((byte1 & 0x80) === 0) {  // 1-byte
+      out.push(byte1);
+    } else if ((byte1 & 0xe0) === 0xc0) {  // 2-byte
+      const byte2 = bytes[pos++] & 0x3f;
+      out.push(((byte1 & 0x1f) << 6) | byte2);
+    } else if ((byte1 & 0xf0) === 0xe0) {
+      const byte2 = bytes[pos++] & 0x3f;
+      const byte3 = bytes[pos++] & 0x3f;
+      out.push(((byte1 & 0x1f) << 12) | (byte2 << 6) | byte3);
+    } else if ((byte1 & 0xf8) === 0xf0) {
+      const byte2 = bytes[pos++] & 0x3f;
+      const byte3 = bytes[pos++] & 0x3f;
+      const byte4 = bytes[pos++] & 0x3f;
+
+      // this can be > 0xffff, so possibly generate surrogates
+      let codepoint = ((byte1 & 0x07) << 0x12) | (byte2 << 0x0c) | (byte3 << 0x06) | byte4;
+      if (codepoint > 0xffff) {
+        // codepoint &= ~0x10000;
+        codepoint -= 0x10000;
+        out.push((codepoint >>> 10) & 0x3ff | 0xd800)
+        codepoint = 0xdc00 | codepoint & 0x3ff;
+      }
+      out.push(codepoint);
+    } else {
+      // FIXME: we're ignoring this
+    }
+  }
+
+  return String.fromCharCode.apply(null, out);
+}
+
+scope['TextEncoder'] = FastTextEncoder;
+scope['TextDecoder'] = FastTextDecoder;
+
+}(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : this)));
+// SOURCE FILE: libdot/third_party/intl-segmenter/intl-segmenter.js
+// Rough polyfill for Intl.Segmenter proposal
+//
+// https://github.com/tc39/proposal-intl-segmenter/blob/master/README.md
+//
+// Caveats and Limitations
+//  * granularity: 'line': 'strictness' option is not supported (ignored)
+//  * In Chrome, uses v8BreakIterator
+//  * Otherwise, uses very simplistic rules
+//    * Ignores locale; only "usable" on English
+//    * granularity: 'grapheme' does not understand combining characters
+//    * granularity: 'sentence' does not understand decimals
+
+(function(global) {
+  if ('Intl' in global && 'Segmenter' in global.Intl)
+    return;
+
+  global.Intl = global.Intl || {};
+
+  const GRANULARITIES = ['grapheme', 'word','sentence', 'line'];
+
+  // TODO: Implement https://www.unicode.org/reports/tr29/
+  const RULES = {
+    grapheme: {
+      grapheme: /^(.|\n)/
+    },
+    word: {
+      letter: /^[a-z](?:'?[a-z])*/i,
+      number: /^\d+([,.]\d+)*/
+    },
+    sentence: {
+      terminator: /^[^.?!\r\n]+[.?!]+[\r\n]?/,
+      separator: /^[^.?!\r\n]+[\r\n]?/
+    },
+    line: {
+      hard: /^\S*[\r\n]/,
+      soft: /^\S*\s*/
+    }
+  };
+
+  // Work around bug in v8BreakIterator where ICU's UWordBreak enum is
+  // used even if granularity is not "word". See the code in
+  // Runtime_BreakIteratorBreakType in runtime/runtime-i18n.cc for
+  // details.
+  function fixBreakType(value, granularity) {
+    // Undo the mapping of UWordBreak to string
+    const ruleStatus = {
+      none: 0, // UBRK_WORD_NONE
+      number: 100, // UBRK_WORD_NUMBER
+      letter: 200, // UBRK_WORD_LETTER
+      kana: 300, // UBRK_WORD_KANA
+      ideo: 400, // UBRK_WORD_IDEO
+      unknown: -1
+    }[value] || 0;
+
+
+    switch (granularity) {
+    case 'character':
+      return undefined;
+    case 'word':
+      return value;
+    case 'sentence':
+      // Map ULineBreakTag rule status to string.
+      return {
+        0: 'terminator',
+        100: 'separator'
+      }[ruleStatus] || value;
+    case 'line':
+      // Map ULineBreakTag rule status to string.
+      return {
+        0: 'soft',
+        100: 'hard'
+      }[ruleStatus] || value;
+    default:
+      return value;
+    }
+  }
+
+  function segment(locale, granularity, string) {
+    const breaks = [];
+    if ('v8BreakIterator' in global.Intl) {
+      if (granularity === 'grapheme')
+        granularity = 'character';
+      const vbi = new global.Intl.v8BreakIterator(locale, {type: granularity});
+      vbi.adoptText(string);
+      let last = 0;
+      let pos = vbi.next();
+      while (pos !== -1) {
+        breaks.push({
+          pos: vbi.current(),
+          segment: string.slice(last, pos),
+          breakType: fixBreakType(vbi.breakType(), granularity)
+        });
+        last = pos;
+        pos = vbi.next();
       }
     } else {
-      if (0x80 <= c && c <= 0xBF) {
-        this.bytesLeft--;
-        this.codePoint = (this.codePoint << 6) + (c - 0x80);
-        if (this.bytesLeft == 0) {
-          // Got a full sequence. Check if it's within bounds and
-          // filter out surrogate pairs.
-          var codePoint = this.codePoint;
-          if (codePoint < this.lowerBound
-              || (0xD800 <= codePoint && codePoint <= 0xDFFF)
-              || codePoint > 0x10FFFF) {
-            ret += '\ufffd';
-          } else {
-            // Encode as UTF-16 in the output.
-            if (codePoint < 0x10000) {
-              ret += String.fromCharCode(codePoint);
-            } else {
-              // Surrogate pair.
-              codePoint -= 0x10000;
-              ret += String.fromCharCode(
-                0xD800 + ((codePoint >>> 10) & 0x3FF),
-                0xDC00 + (codePoint & 0x3FF));
-            }
+      const rules = RULES[granularity];
+      let pos = 0;
+      while (pos < string.length) {
+        let found = false;
+        for (let rule of Object.keys(rules)) {
+          const re = rules[rule];
+          const m = string.slice(pos).match(re);
+          if (m) {
+            pos += m[0].length;
+            breaks.push({
+              pos: pos,
+              segment: m[0],
+              breakType: granularity === 'grapheme' ? undefined : rule
+            });
+            found = true;
+            break;
           }
         }
-      } else {
-        // Too few bytes in multi-byte sequence. Rewind stream so we
-        // don't lose the next byte.
-        ret += '\ufffd';
-        this.bytesLeft = 0;
-        i--;
-      }
-    }
-  }
-  return ret;
-};
-
-/**
- * Decodes UTF-8 data. This is a convenience function for when all the
- * data is already known.
- *
- * @param {String} str data to decode, represented as a JavaScript
- *     String with each code unit representing a byte between 0x00 to
- *     0xFF.
- * @return {String} The data decoded into a JavaScript UTF-16 string.
- */
-lib.decodeUTF8 = function(utf8) {
-  return (new lib.UTF8Decoder()).decode(utf8);
-};
-
-/**
- * Encodes a UTF-16 string into UTF-8.
- *
- * TODO(davidben): Do we need a stateful version of this that can
- * handle a surrogate pair split in two calls? What happens if a
- * keypress event would have contained a character outside the BMP?
- *
- * @param {String} str The string to encode.
- * @return {String} The string encoded as UTF-8, as a JavaScript
- *     string with bytes represented as code units from 0x00 to 0xFF.
- */
-lib.encodeUTF8 = function(str) {
-  var ret = '';
-  for (var i = 0; i < str.length; i++) {
-    // Get a unicode code point out of str.
-    var c = str.charCodeAt(i);
-    if (0xDC00 <= c && c <= 0xDFFF) {
-      c = 0xFFFD;
-    } else if (0xD800 <= c && c <= 0xDBFF) {
-      if (i+1 < str.length) {
-        var d = str.charCodeAt(i+1);
-        if (0xDC00 <= d && d <= 0xDFFF) {
-          // Swallow a surrogate pair.
-          c = 0x10000 + ((c & 0x3FF) << 10) + (d & 0x3FF);
-          i++;
-        } else {
-          c = 0xFFFD;
+        if (!found) {
+          breaks.push({
+            pos: pos + 1,
+            segment: string.slice(pos, ++pos),
+            breakType: 'none'
+          });
         }
-      } else {
-        c = 0xFFFD;
       }
     }
+    breaks.initial = 0;
+    return breaks;
+  }
 
-    // Encode c in UTF-8.
-    var bytesLeft;
-    if (c <= 0x7F) {
-      ret += str.charAt(i);
-      continue;
-    } else if (c <= 0x7FF) {
-      ret += String.fromCharCode(0xC0 | (c >>> 6));
-      bytesLeft = 1;
-    } else if (c <= 0xFFFF) {
-      ret += String.fromCharCode(0xE0 | (c >>> 12));
-      bytesLeft = 2;
-    } else /* if (c <= 0x10FFFF) */ {
-      ret += String.fromCharCode(0xF0 | (c >>> 18));
-      bytesLeft = 3;
+  class $SegmentIterator$ {
+    constructor(string, breaks) {
+      this._cur = -1;
+      this._type = undefined;
+      this._breaks = breaks;
     }
 
-    while (bytesLeft > 0) {
-      bytesLeft--;
-      ret += String.fromCharCode(0x80 | ((c >>> (6 * bytesLeft)) & 0x3F));
+    [Symbol.iterator]() { return this; }
+
+    next() {
+      if (this._cur < this._breaks.length)
+        ++this._cur;
+
+      if (this._cur >= this._breaks.length) {
+        this._type = undefined;
+        return {done: true, value: undefined};
+      }
+
+      this._type = this._breaks[this._cur].breakType;
+      return {
+        done: false,
+        value: {
+          segment: this._breaks[this._cur].segment,
+          breakType: this._breaks[this._cur].breakType
+        }
+      };
+    }
+
+    following(index = undefined) {
+      if (!this._breaks.length)
+        return true;
+      if (index === undefined) {
+        if (this._cur < this._breaks.length)
+          ++this._cur;
+      } else {
+        // TODO: binary search
+        for (this._cur = 0;
+             this._cur < this._breaks.length
+             && this._breaks[this._cur].pos < index;
+             ++this._cur) {}
+      }
+
+      this._type = this._cur < this._breaks.length
+        ? this._breaks[this._cur].breakType : undefined;
+      return this._cur + 1 >= this._breaks.length;
+    }
+
+    preceding(index = undefined) {
+      if (!this._breaks.length)
+        return true;
+      if (index === undefined) {
+        if (this._cur >= this._breaks.length)
+          --this._cur;
+        if (this._cur >= 0)
+          --this._cur;
+      } else {
+        // TODO: binary search
+        for (this._cur = this._breaks.length - 1;
+             this._cur >= 0
+             && this._breaks[this._cur].pos >= index;
+             --this._cur) {}
+      }
+
+      this._type =
+        this._cur + 1 >= this._breaks.length ? undefined :
+        this._breaks[this._cur + 1].breakType;
+      return this._cur < 0;
+    }
+
+    get position() {
+      if (this._cur < 0 || !this._breaks.length)
+        return this._breaks.initial;
+      if (this._cur >= this._breaks.length)
+        return this._breaks[this._breaks.length - 1].pos;
+      return this._breaks[this._cur].pos;
+    }
+
+    get breakType() {
+      return this._type;
     }
   }
-  return ret;
-};
+
+  global.Intl.Segmenter = class Segmenter {
+    constructor(locale, options) {
+      this._locale = Array.isArray(locale)
+        ? locale.map(s => String(s)) : String(locale || navigator.language);
+      options = Object.assign({granularity: 'grapheme'}, options);
+      this._granularity = GRANULARITIES.includes(options.granularity)
+        ? options.granularity : 'grapheme';
+    }
+
+    segment(string) {
+      return new $SegmentIterator$(
+        string, segment(this._locale, this._granularity, string));
+    }
+  };
+}(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : this)));
 // SOURCE FILE: libdot/third_party/wcwidth/lib_wc.js
 // Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
 // Use of lib.wc source code is governed by a BSD-style license that can be
@@ -3899,8 +3915,8 @@ lib.encodeUTF8 = function(str) {
  * This is an implementation of wcwidth() and wcswidth() (defined in
  * IEEE Std 1002.1-2001) for Unicode.
  *
- * http://www.opengroup.org/onlinepubs/007904975/functions/wcwidth.html
- * http://www.opengroup.org/onlinepubs/007904975/functions/wcswidth.html
+ * https://www.opengroup.org/onlinepubs/007904975/functions/wcwidth.html
+ * https://www.opengroup.org/onlinepubs/007904975/functions/wcswidth.html
  *
  * In fixed-width output devices, Latin characters all occupy a single
  * "cell" position of equal width, whereas ideographic CJK characters
@@ -3945,7 +3961,7 @@ lib.encodeUTF8 = function(str) {
  * but also of each presentation form, something the author of these
  * routines has avoided to do so far.
  *
- * http://www.unicode.org/unicode/reports/tr11/
+ * https://www.unicode.org/unicode/reports/tr11/
  *
  * Markus Kuhn -- 2007-05-26 (Unicode 5.0)
  *
@@ -3953,7 +3969,7 @@ lib.encodeUTF8 = function(str) {
  * for any purpose and without fee is hereby granted. The author
  * disclaims all warranties with regard to lib.wc software.
  *
- * Latest version: http://www.cl.cam.ac.uk/~mgk25/ucs/wcwidth.c
+ * Latest version: https://www.cl.cam.ac.uk/~mgk25/ucs/wcwidth.c
  */
 
 /**
@@ -4027,82 +4043,84 @@ lib.wc.combining = [
     [0x0d4d, 0x0d4d], [0x0d62, 0x0d63], [0x0dca, 0x0dca],
     [0x0dd2, 0x0dd4], [0x0dd6, 0x0dd6], [0x0e31, 0x0e31],
     [0x0e34, 0x0e3a], [0x0e47, 0x0e4e], [0x0eb1, 0x0eb1],
-    [0x0eb4, 0x0eb9], [0x0ebb, 0x0ebc], [0x0ec8, 0x0ecd],
-    [0x0f18, 0x0f19], [0x0f35, 0x0f35], [0x0f37, 0x0f37],
-    [0x0f39, 0x0f39], [0x0f71, 0x0f7e], [0x0f80, 0x0f84],
-    [0x0f86, 0x0f87], [0x0f8d, 0x0f97], [0x0f99, 0x0fbc],
-    [0x0fc6, 0x0fc6], [0x102d, 0x1030], [0x1032, 0x1037],
-    [0x1039, 0x103a], [0x103d, 0x103e], [0x1058, 0x1059],
-    [0x105e, 0x1060], [0x1071, 0x1074], [0x1082, 0x1082],
-    [0x1085, 0x1086], [0x108d, 0x108d], [0x109d, 0x109d],
-    [0x1160, 0x11ff], [0x135d, 0x135f], [0x1712, 0x1714],
-    [0x1732, 0x1734], [0x1752, 0x1753], [0x1772, 0x1773],
-    [0x17b4, 0x17b5], [0x17b7, 0x17bd], [0x17c6, 0x17c6],
-    [0x17c9, 0x17d3], [0x17dd, 0x17dd], [0x180b, 0x180e],
-    [0x1885, 0x1886], [0x18a9, 0x18a9], [0x1920, 0x1922],
-    [0x1927, 0x1928], [0x1932, 0x1932], [0x1939, 0x193b],
-    [0x1a17, 0x1a18], [0x1a1b, 0x1a1b], [0x1a56, 0x1a56],
-    [0x1a58, 0x1a5e], [0x1a60, 0x1a60], [0x1a62, 0x1a62],
-    [0x1a65, 0x1a6c], [0x1a73, 0x1a7c], [0x1a7f, 0x1a7f],
-    [0x1ab0, 0x1abe], [0x1b00, 0x1b03], [0x1b34, 0x1b34],
-    [0x1b36, 0x1b3a], [0x1b3c, 0x1b3c], [0x1b42, 0x1b42],
-    [0x1b6b, 0x1b73], [0x1b80, 0x1b81], [0x1ba2, 0x1ba5],
-    [0x1ba8, 0x1ba9], [0x1bab, 0x1bad], [0x1be6, 0x1be6],
-    [0x1be8, 0x1be9], [0x1bed, 0x1bed], [0x1bef, 0x1bf1],
-    [0x1c2c, 0x1c33], [0x1c36, 0x1c37], [0x1cd0, 0x1cd2],
-    [0x1cd4, 0x1ce0], [0x1ce2, 0x1ce8], [0x1ced, 0x1ced],
-    [0x1cf4, 0x1cf4], [0x1cf8, 0x1cf9], [0x1dc0, 0x1df9],
-    [0x1dfb, 0x1dff], [0x200b, 0x200f], [0x202a, 0x202e],
-    [0x2060, 0x2064], [0x2066, 0x206f], [0x20d0, 0x20f0],
-    [0x2cef, 0x2cf1], [0x2d7f, 0x2d7f], [0x2de0, 0x2dff],
-    [0x302a, 0x302d], [0x3099, 0x309a], [0xa66f, 0xa672],
-    [0xa674, 0xa67d], [0xa69e, 0xa69f], [0xa6f0, 0xa6f1],
-    [0xa802, 0xa802], [0xa806, 0xa806], [0xa80b, 0xa80b],
-    [0xa825, 0xa826], [0xa8c4, 0xa8c5], [0xa8e0, 0xa8f1],
-    [0xa8ff, 0xa8ff], [0xa926, 0xa92d], [0xa947, 0xa951],
-    [0xa980, 0xa982], [0xa9b3, 0xa9b3], [0xa9b6, 0xa9b9],
-    [0xa9bc, 0xa9bc], [0xa9e5, 0xa9e5], [0xaa29, 0xaa2e],
-    [0xaa31, 0xaa32], [0xaa35, 0xaa36], [0xaa43, 0xaa43],
-    [0xaa4c, 0xaa4c], [0xaa7c, 0xaa7c], [0xaab0, 0xaab0],
-    [0xaab2, 0xaab4], [0xaab7, 0xaab8], [0xaabe, 0xaabf],
-    [0xaac1, 0xaac1], [0xaaec, 0xaaed], [0xaaf6, 0xaaf6],
-    [0xabe5, 0xabe5], [0xabe8, 0xabe8], [0xabed, 0xabed],
-    [0xfb1e, 0xfb1e], [0xfe00, 0xfe0f], [0xfe20, 0xfe2f],
-    [0xfeff, 0xfeff], [0xfff9, 0xfffb], [0x101fd, 0x101fd],
-    [0x102e0, 0x102e0], [0x10376, 0x1037a], [0x10a01, 0x10a03],
-    [0x10a05, 0x10a06], [0x10a0c, 0x10a0f], [0x10a38, 0x10a3a],
-    [0x10a3f, 0x10a3f], [0x10ae5, 0x10ae6], [0x10d24, 0x10d27],
-    [0x10f46, 0x10f50], [0x11001, 0x11001], [0x11038, 0x11046],
-    [0x1107f, 0x11081], [0x110b3, 0x110b6], [0x110b9, 0x110ba],
-    [0x11100, 0x11102], [0x11127, 0x1112b], [0x1112d, 0x11134],
-    [0x11173, 0x11173], [0x11180, 0x11181], [0x111b6, 0x111be],
-    [0x111c9, 0x111cc], [0x1122f, 0x11231], [0x11234, 0x11234],
-    [0x11236, 0x11237], [0x1123e, 0x1123e], [0x112df, 0x112df],
-    [0x112e3, 0x112ea], [0x11300, 0x11301], [0x1133b, 0x1133c],
-    [0x11340, 0x11340], [0x11366, 0x1136c], [0x11370, 0x11374],
-    [0x11438, 0x1143f], [0x11442, 0x11444], [0x11446, 0x11446],
-    [0x1145e, 0x1145e], [0x114b3, 0x114b8], [0x114ba, 0x114ba],
-    [0x114bf, 0x114c0], [0x114c2, 0x114c3], [0x115b2, 0x115b5],
-    [0x115bc, 0x115bd], [0x115bf, 0x115c0], [0x115dc, 0x115dd],
-    [0x11633, 0x1163a], [0x1163d, 0x1163d], [0x1163f, 0x11640],
-    [0x116ab, 0x116ab], [0x116ad, 0x116ad], [0x116b0, 0x116b5],
-    [0x116b7, 0x116b7], [0x1171d, 0x1171f], [0x11722, 0x11725],
-    [0x11727, 0x1172b], [0x1182f, 0x11837], [0x11839, 0x1183a],
-    [0x11a01, 0x11a0a], [0x11a33, 0x11a38], [0x11a3b, 0x11a3e],
-    [0x11a47, 0x11a47], [0x11a51, 0x11a56], [0x11a59, 0x11a5b],
-    [0x11a8a, 0x11a96], [0x11a98, 0x11a99], [0x11c30, 0x11c36],
-    [0x11c38, 0x11c3d], [0x11c3f, 0x11c3f], [0x11c92, 0x11ca7],
-    [0x11caa, 0x11cb0], [0x11cb2, 0x11cb3], [0x11cb5, 0x11cb6],
-    [0x11d31, 0x11d36], [0x11d3a, 0x11d3a], [0x11d3c, 0x11d3d],
-    [0x11d3f, 0x11d45], [0x11d47, 0x11d47], [0x11d90, 0x11d91],
-    [0x11d95, 0x11d95], [0x11d97, 0x11d97], [0x11ef3, 0x11ef4],
-    [0x16af0, 0x16af4], [0x16b30, 0x16b36], [0x16f8f, 0x16f92],
-    [0x1bc9d, 0x1bc9e], [0x1bca0, 0x1bca3], [0x1d167, 0x1d169],
-    [0x1d173, 0x1d182], [0x1d185, 0x1d18b], [0x1d1aa, 0x1d1ad],
-    [0x1d242, 0x1d244], [0x1da00, 0x1da36], [0x1da3b, 0x1da6c],
-    [0x1da75, 0x1da75], [0x1da84, 0x1da84], [0x1da9b, 0x1da9f],
-    [0x1daa1, 0x1daaf], [0x1e000, 0x1e006], [0x1e008, 0x1e018],
-    [0x1e01b, 0x1e021], [0x1e023, 0x1e024], [0x1e026, 0x1e02a],
+    [0x0eb4, 0x0ebc], [0x0ec8, 0x0ecd], [0x0f18, 0x0f19],
+    [0x0f35, 0x0f35], [0x0f37, 0x0f37], [0x0f39, 0x0f39],
+    [0x0f71, 0x0f7e], [0x0f80, 0x0f84], [0x0f86, 0x0f87],
+    [0x0f8d, 0x0f97], [0x0f99, 0x0fbc], [0x0fc6, 0x0fc6],
+    [0x102d, 0x1030], [0x1032, 0x1037], [0x1039, 0x103a],
+    [0x103d, 0x103e], [0x1058, 0x1059], [0x105e, 0x1060],
+    [0x1071, 0x1074], [0x1082, 0x1082], [0x1085, 0x1086],
+    [0x108d, 0x108d], [0x109d, 0x109d], [0x1160, 0x11ff],
+    [0x135d, 0x135f], [0x1712, 0x1714], [0x1732, 0x1734],
+    [0x1752, 0x1753], [0x1772, 0x1773], [0x17b4, 0x17b5],
+    [0x17b7, 0x17bd], [0x17c6, 0x17c6], [0x17c9, 0x17d3],
+    [0x17dd, 0x17dd], [0x180b, 0x180e], [0x1885, 0x1886],
+    [0x18a9, 0x18a9], [0x1920, 0x1922], [0x1927, 0x1928],
+    [0x1932, 0x1932], [0x1939, 0x193b], [0x1a17, 0x1a18],
+    [0x1a1b, 0x1a1b], [0x1a56, 0x1a56], [0x1a58, 0x1a5e],
+    [0x1a60, 0x1a60], [0x1a62, 0x1a62], [0x1a65, 0x1a6c],
+    [0x1a73, 0x1a7c], [0x1a7f, 0x1a7f], [0x1ab0, 0x1abe],
+    [0x1b00, 0x1b03], [0x1b34, 0x1b34], [0x1b36, 0x1b3a],
+    [0x1b3c, 0x1b3c], [0x1b42, 0x1b42], [0x1b6b, 0x1b73],
+    [0x1b80, 0x1b81], [0x1ba2, 0x1ba5], [0x1ba8, 0x1ba9],
+    [0x1bab, 0x1bad], [0x1be6, 0x1be6], [0x1be8, 0x1be9],
+    [0x1bed, 0x1bed], [0x1bef, 0x1bf1], [0x1c2c, 0x1c33],
+    [0x1c36, 0x1c37], [0x1cd0, 0x1cd2], [0x1cd4, 0x1ce0],
+    [0x1ce2, 0x1ce8], [0x1ced, 0x1ced], [0x1cf4, 0x1cf4],
+    [0x1cf8, 0x1cf9], [0x1dc0, 0x1df9], [0x1dfb, 0x1dff],
+    [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x2064],
+    [0x2066, 0x206f], [0x20d0, 0x20f0], [0x2cef, 0x2cf1],
+    [0x2d7f, 0x2d7f], [0x2de0, 0x2dff], [0x302a, 0x302d],
+    [0x3099, 0x309a], [0xa66f, 0xa672], [0xa674, 0xa67d],
+    [0xa69e, 0xa69f], [0xa6f0, 0xa6f1], [0xa802, 0xa802],
+    [0xa806, 0xa806], [0xa80b, 0xa80b], [0xa825, 0xa826],
+    [0xa8c4, 0xa8c5], [0xa8e0, 0xa8f1], [0xa8ff, 0xa8ff],
+    [0xa926, 0xa92d], [0xa947, 0xa951], [0xa980, 0xa982],
+    [0xa9b3, 0xa9b3], [0xa9b6, 0xa9b9], [0xa9bc, 0xa9bd],
+    [0xa9e5, 0xa9e5], [0xaa29, 0xaa2e], [0xaa31, 0xaa32],
+    [0xaa35, 0xaa36], [0xaa43, 0xaa43], [0xaa4c, 0xaa4c],
+    [0xaa7c, 0xaa7c], [0xaab0, 0xaab0], [0xaab2, 0xaab4],
+    [0xaab7, 0xaab8], [0xaabe, 0xaabf], [0xaac1, 0xaac1],
+    [0xaaec, 0xaaed], [0xaaf6, 0xaaf6], [0xabe5, 0xabe5],
+    [0xabe8, 0xabe8], [0xabed, 0xabed], [0xfb1e, 0xfb1e],
+    [0xfe00, 0xfe0f], [0xfe20, 0xfe2f], [0xfeff, 0xfeff],
+    [0xfff9, 0xfffb], [0x101fd, 0x101fd], [0x102e0, 0x102e0],
+    [0x10376, 0x1037a], [0x10a01, 0x10a03], [0x10a05, 0x10a06],
+    [0x10a0c, 0x10a0f], [0x10a38, 0x10a3a], [0x10a3f, 0x10a3f],
+    [0x10ae5, 0x10ae6], [0x10d24, 0x10d27], [0x10f46, 0x10f50],
+    [0x11001, 0x11001], [0x11038, 0x11046], [0x1107f, 0x11081],
+    [0x110b3, 0x110b6], [0x110b9, 0x110ba], [0x11100, 0x11102],
+    [0x11127, 0x1112b], [0x1112d, 0x11134], [0x11173, 0x11173],
+    [0x11180, 0x11181], [0x111b6, 0x111be], [0x111c9, 0x111cc],
+    [0x1122f, 0x11231], [0x11234, 0x11234], [0x11236, 0x11237],
+    [0x1123e, 0x1123e], [0x112df, 0x112df], [0x112e3, 0x112ea],
+    [0x11300, 0x11301], [0x1133b, 0x1133c], [0x11340, 0x11340],
+    [0x11366, 0x1136c], [0x11370, 0x11374], [0x11438, 0x1143f],
+    [0x11442, 0x11444], [0x11446, 0x11446], [0x1145e, 0x1145e],
+    [0x114b3, 0x114b8], [0x114ba, 0x114ba], [0x114bf, 0x114c0],
+    [0x114c2, 0x114c3], [0x115b2, 0x115b5], [0x115bc, 0x115bd],
+    [0x115bf, 0x115c0], [0x115dc, 0x115dd], [0x11633, 0x1163a],
+    [0x1163d, 0x1163d], [0x1163f, 0x11640], [0x116ab, 0x116ab],
+    [0x116ad, 0x116ad], [0x116b0, 0x116b5], [0x116b7, 0x116b7],
+    [0x1171d, 0x1171f], [0x11722, 0x11725], [0x11727, 0x1172b],
+    [0x1182f, 0x11837], [0x11839, 0x1183a], [0x119d4, 0x119d7],
+    [0x119da, 0x119db], [0x119e0, 0x119e0], [0x11a01, 0x11a0a],
+    [0x11a33, 0x11a38], [0x11a3b, 0x11a3e], [0x11a47, 0x11a47],
+    [0x11a51, 0x11a56], [0x11a59, 0x11a5b], [0x11a8a, 0x11a96],
+    [0x11a98, 0x11a99], [0x11c30, 0x11c36], [0x11c38, 0x11c3d],
+    [0x11c3f, 0x11c3f], [0x11c92, 0x11ca7], [0x11caa, 0x11cb0],
+    [0x11cb2, 0x11cb3], [0x11cb5, 0x11cb6], [0x11d31, 0x11d36],
+    [0x11d3a, 0x11d3a], [0x11d3c, 0x11d3d], [0x11d3f, 0x11d45],
+    [0x11d47, 0x11d47], [0x11d90, 0x11d91], [0x11d95, 0x11d95],
+    [0x11d97, 0x11d97], [0x11ef3, 0x11ef4], [0x13430, 0x13438],
+    [0x16af0, 0x16af4], [0x16b30, 0x16b36], [0x16f4f, 0x16f4f],
+    [0x16f8f, 0x16f92], [0x1bc9d, 0x1bc9e], [0x1bca0, 0x1bca3],
+    [0x1d167, 0x1d169], [0x1d173, 0x1d182], [0x1d185, 0x1d18b],
+    [0x1d1aa, 0x1d1ad], [0x1d242, 0x1d244], [0x1da00, 0x1da36],
+    [0x1da3b, 0x1da6c], [0x1da75, 0x1da75], [0x1da84, 0x1da84],
+    [0x1da9b, 0x1da9f], [0x1daa1, 0x1daaf], [0x1e000, 0x1e006],
+    [0x1e008, 0x1e018], [0x1e01b, 0x1e021], [0x1e023, 0x1e024],
+    [0x1e026, 0x1e02a], [0x1e130, 0x1e136], [0x1e2ec, 0x1e2ef],
     [0x1e8d0, 0x1e8d6], [0x1e944, 0x1e94a], [0xe0001, 0xe0001],
     [0xe0020, 0xe007f], [0xe0100, 0xe01ef],
 ];
@@ -4175,22 +4193,24 @@ lib.wc.ambiguous = [
     [0x3040, 0x4dbf], [0x4e00, 0xa4cf], [0xa960, 0xa97f],
     [0xac00, 0xd7a3], [0xe000, 0xfaff], [0xfe00, 0xfe19],
     [0xfe30, 0xfe6f], [0xff01, 0xff60], [0xffe0, 0xffe6],
-    [0xfffd, 0xfffd], [0x16fe0, 0x16fe1], [0x17000, 0x18aff],
-    [0x1b000, 0x1b12f], [0x1b170, 0x1b2ff], [0x1f004, 0x1f004],
-    [0x1f0cf, 0x1f0cf], [0x1f100, 0x1f10a], [0x1f110, 0x1f12d],
-    [0x1f130, 0x1f169], [0x1f170, 0x1f1ac], [0x1f200, 0x1f202],
-    [0x1f210, 0x1f23b], [0x1f240, 0x1f248], [0x1f250, 0x1f251],
-    [0x1f260, 0x1f265], [0x1f300, 0x1f320], [0x1f32d, 0x1f335],
-    [0x1f337, 0x1f37c], [0x1f37e, 0x1f393], [0x1f3a0, 0x1f3ca],
-    [0x1f3cf, 0x1f3d3], [0x1f3e0, 0x1f3f0], [0x1f3f4, 0x1f3f4],
-    [0x1f3f8, 0x1f43e], [0x1f440, 0x1f440], [0x1f442, 0x1f4fc],
-    [0x1f4ff, 0x1f53d], [0x1f54b, 0x1f54e], [0x1f550, 0x1f567],
-    [0x1f57a, 0x1f57a], [0x1f595, 0x1f596], [0x1f5a4, 0x1f5a4],
-    [0x1f5fb, 0x1f64f], [0x1f680, 0x1f6c5], [0x1f6cc, 0x1f6cc],
-    [0x1f6d0, 0x1f6d2], [0x1f6eb, 0x1f6ec], [0x1f6f4, 0x1f6f9],
-    [0x1f910, 0x1f93e], [0x1f940, 0x1f970], [0x1f973, 0x1f976],
-    [0x1f97a, 0x1f97a], [0x1f97c, 0x1f9a2], [0x1f9b0, 0x1f9b9],
-    [0x1f9c0, 0x1f9c2], [0x1f9d0, 0x1f9ff], [0x20000, 0x2fffd],
+    [0xfffd, 0xfffd], [0x16fe0, 0x16fe3], [0x17000, 0x18aff],
+    [0x1b000, 0x1b12f], [0x1b150, 0x1b152], [0x1b164, 0x1b167],
+    [0x1b170, 0x1b2ff], [0x1f004, 0x1f004], [0x1f0cf, 0x1f0cf],
+    [0x1f100, 0x1f10a], [0x1f110, 0x1f12d], [0x1f130, 0x1f169],
+    [0x1f170, 0x1f1ac], [0x1f200, 0x1f202], [0x1f210, 0x1f23b],
+    [0x1f240, 0x1f248], [0x1f250, 0x1f251], [0x1f260, 0x1f265],
+    [0x1f300, 0x1f320], [0x1f32d, 0x1f335], [0x1f337, 0x1f37c],
+    [0x1f37e, 0x1f393], [0x1f3a0, 0x1f3ca], [0x1f3cf, 0x1f3d3],
+    [0x1f3e0, 0x1f3f0], [0x1f3f4, 0x1f3f4], [0x1f3f8, 0x1f43e],
+    [0x1f440, 0x1f440], [0x1f442, 0x1f4fc], [0x1f4ff, 0x1f53d],
+    [0x1f54b, 0x1f54e], [0x1f550, 0x1f567], [0x1f57a, 0x1f57a],
+    [0x1f595, 0x1f596], [0x1f5a4, 0x1f5a4], [0x1f5fb, 0x1f64f],
+    [0x1f680, 0x1f6c5], [0x1f6cc, 0x1f6cc], [0x1f6d0, 0x1f6d2],
+    [0x1f6d5, 0x1f6d5], [0x1f6eb, 0x1f6ec], [0x1f6f4, 0x1f6fa],
+    [0x1f7e0, 0x1f7eb], [0x1f90d, 0x1f971], [0x1f973, 0x1f976],
+    [0x1f97a, 0x1f9a2], [0x1f9a5, 0x1f9aa], [0x1f9ae, 0x1f9ca],
+    [0x1f9cd, 0x1f9ff], [0x1fa70, 0x1fa73], [0x1fa78, 0x1fa7a],
+    [0x1fa80, 0x1fa82], [0x1fa90, 0x1fa95], [0x20000, 0x2fffd],
     [0x30000, 0x3fffd], [0xe0100, 0xe01ef], [0xf0000, 0xffffd],
     [0x100000, 0x10fffd],
 ];
@@ -4213,22 +4233,24 @@ lib.wc.unambiguous = [
     [0x2ff0, 0x303e], [0x3040, 0x3247], [0x3250, 0x4dbf],
     [0x4e00, 0xa4cf], [0xa960, 0xa97f], [0xac00, 0xd7a3],
     [0xf900, 0xfaff], [0xfe10, 0xfe19], [0xfe30, 0xfe6f],
-    [0xff01, 0xff60], [0xffe0, 0xffe6], [0x16fe0, 0x16fe1],
-    [0x17000, 0x18aff], [0x1b000, 0x1b12f], [0x1b170, 0x1b2ff],
-    [0x1f004, 0x1f004], [0x1f0cf, 0x1f0cf], [0x1f18e, 0x1f18e],
-    [0x1f191, 0x1f19a], [0x1f200, 0x1f202], [0x1f210, 0x1f23b],
-    [0x1f240, 0x1f248], [0x1f250, 0x1f251], [0x1f260, 0x1f265],
-    [0x1f300, 0x1f320], [0x1f32d, 0x1f335], [0x1f337, 0x1f37c],
-    [0x1f37e, 0x1f393], [0x1f3a0, 0x1f3ca], [0x1f3cf, 0x1f3d3],
-    [0x1f3e0, 0x1f3f0], [0x1f3f4, 0x1f3f4], [0x1f3f8, 0x1f43e],
-    [0x1f440, 0x1f440], [0x1f442, 0x1f4fc], [0x1f4ff, 0x1f53d],
-    [0x1f54b, 0x1f54e], [0x1f550, 0x1f567], [0x1f57a, 0x1f57a],
-    [0x1f595, 0x1f596], [0x1f5a4, 0x1f5a4], [0x1f5fb, 0x1f64f],
-    [0x1f680, 0x1f6c5], [0x1f6cc, 0x1f6cc], [0x1f6d0, 0x1f6d2],
-    [0x1f6eb, 0x1f6ec], [0x1f6f4, 0x1f6f9], [0x1f910, 0x1f93e],
-    [0x1f940, 0x1f970], [0x1f973, 0x1f976], [0x1f97a, 0x1f97a],
-    [0x1f97c, 0x1f9a2], [0x1f9b0, 0x1f9b9], [0x1f9c0, 0x1f9c2],
-    [0x1f9d0, 0x1f9ff], [0x20000, 0x2fffd], [0x30000, 0x3fffd],
+    [0xff01, 0xff60], [0xffe0, 0xffe6], [0x16fe0, 0x16fe3],
+    [0x17000, 0x18aff], [0x1b000, 0x1b12f], [0x1b150, 0x1b152],
+    [0x1b164, 0x1b167], [0x1b170, 0x1b2ff], [0x1f004, 0x1f004],
+    [0x1f0cf, 0x1f0cf], [0x1f18e, 0x1f18e], [0x1f191, 0x1f19a],
+    [0x1f200, 0x1f202], [0x1f210, 0x1f23b], [0x1f240, 0x1f248],
+    [0x1f250, 0x1f251], [0x1f260, 0x1f265], [0x1f300, 0x1f320],
+    [0x1f32d, 0x1f335], [0x1f337, 0x1f37c], [0x1f37e, 0x1f393],
+    [0x1f3a0, 0x1f3ca], [0x1f3cf, 0x1f3d3], [0x1f3e0, 0x1f3f0],
+    [0x1f3f4, 0x1f3f4], [0x1f3f8, 0x1f43e], [0x1f440, 0x1f440],
+    [0x1f442, 0x1f4fc], [0x1f4ff, 0x1f53d], [0x1f54b, 0x1f54e],
+    [0x1f550, 0x1f567], [0x1f57a, 0x1f57a], [0x1f595, 0x1f596],
+    [0x1f5a4, 0x1f5a4], [0x1f5fb, 0x1f64f], [0x1f680, 0x1f6c5],
+    [0x1f6cc, 0x1f6cc], [0x1f6d0, 0x1f6d2], [0x1f6d5, 0x1f6d5],
+    [0x1f6eb, 0x1f6ec], [0x1f6f4, 0x1f6fa], [0x1f7e0, 0x1f7eb],
+    [0x1f90d, 0x1f971], [0x1f973, 0x1f976], [0x1f97a, 0x1f9a2],
+    [0x1f9a5, 0x1f9aa], [0x1f9ae, 0x1f9ca], [0x1f9cd, 0x1f9ff],
+    [0x1fa70, 0x1fa73], [0x1fa78, 0x1fa7a], [0x1fa80, 0x1fa82],
+    [0x1fa90, 0x1fa95], [0x20000, 0x2fffd], [0x30000, 0x3fffd],
 ];
 
 /**
@@ -4422,11 +4444,11 @@ lib.wc.substring = function(str, start, end) {
   return lib.wc.substr(str, start, end - start);
 };
 lib.resource.add('libdot/changelog/version', 'text/plain',
-'1.26'
+'2.0.0'
 );
 
 lib.resource.add('libdot/changelog/date', 'text/plain',
-'2019-01-19'
+'2019-06-17'
 );
 
 // This file was generated by libdot/bin/concat.sh.
@@ -4657,19 +4679,19 @@ lib.resource.add('hterm/images/icon-96', 'image/png;base64',
 );
 
 lib.resource.add('hterm/concat/date', 'text/plain',
-'Mon, 17 Jun 2019 16:59:40 +0000'
+'Tue, 18 Jun 2019 13:12:31 +0000'
 );
 
 lib.resource.add('hterm/changelog/version', 'text/plain',
-'1.84'
+'1.85'
 );
 
 lib.resource.add('hterm/changelog/date', 'text/plain',
-'2019-01-19'
+'2019-06-17'
 );
 
 lib.resource.add('hterm/git/HEAD', 'text/plain',
-'231ff3d044f0fb40bb205265c772f4caff141aae'
+'530691a7e349cc0038ef14f1eb2a7c6ce8971e73'
 );
 
 // This file was generated by libdot/bin/concat.sh.
@@ -4705,8 +4727,6 @@ lib.resource.add('hterm/git/HEAD', 'text/plain',
 // Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-lib.rtdep('lib.Storage');
 
 /**
  * @fileoverview Declares the hterm.* namespace and some basic shared utilities
@@ -4757,15 +4777,6 @@ hterm.notifyCopyMessage = '\u2702';
  * be replaced by the terminal title.
  */
 hterm.desktopNotificationTitle = '\u266A %(title) \u266A';
-
-/**
- * List of known hterm test suites.
- *
- * A test harness should ensure that they all exist before running.
- */
-hterm.testDeps = ['hterm.AccessibilityReader.Tests', 'hterm.ScrollPort.Tests',
-                  'hterm.Screen.Tests', 'hterm.Terminal.Tests',
-                  'hterm.VT.Tests', 'hterm.VT.CannedTests'];
 
 /**
  * The hterm init function, registered with lib.registerInit().
@@ -5767,8 +5778,6 @@ hterm.ContextMenu.prototype.hide = function() {
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-lib.rtdep('lib.f');
-
 /**
  * First draft of the interface between the terminal and a third party dialog.
  *
@@ -5985,8 +5994,6 @@ hterm.Frame.prototype.show = function() {
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-lib.rtdep('hterm.Keyboard.KeyMap');
-
 /**
  * Keyboard handler.
  *
@@ -6161,7 +6168,7 @@ hterm.Keyboard.KeyActions = {
    * Call preventDefault and stopPropagation for this key event and nothing
    * else.
    */
-  CANCEL: lib.f.createEnum('CANCEL'),
+  CANCEL: Symbol('CANCEL'),
 
   /**
    * This performs the default terminal action for the key.  If used in the
@@ -6187,13 +6194,13 @@ hterm.Keyboard.KeyActions = {
    *  - If meta is down and configured to send an escape, '\x1b' will be sent
    *    before the normal action is performed.
    */
-  DEFAULT: lib.f.createEnum('DEFAULT'),
+  DEFAULT: Symbol('DEFAULT'),
 
   /**
    * Causes the terminal to opt out of handling the key event, instead letting
    * the browser deal with it.
    */
-  PASS: lib.f.createEnum('PASS'),
+  PASS: Symbol('PASS'),
 
   /**
    * Insert the first or second character of the keyCap, based on e.shiftKey.
@@ -6203,7 +6210,7 @@ hterm.Keyboard.KeyActions = {
    * It is useful for a modified key action, where it essentially strips the
    * modifier while preventing the browser from reacting to the key.
    */
-  STRIP: lib.f.createEnum('STRIP')
+  STRIP: Symbol('STRIP')
 };
 
 /**
@@ -6504,7 +6511,8 @@ hterm.Keyboard.prototype.onKeyDown_ = function(e) {
     meta = false;
   }
 
-  if (action.substr(0, 2) == '\x1b[' && (alt || control || shift || meta)) {
+  if (typeof action == 'string' && action.substr(0, 2) == '\x1b[' &&
+      (alt || control || shift || meta)) {
     // The action is an escape sequence that and it was triggered in the
     // presence of a keyboard modifier, we may need to alter the action to
     // include the modifier before sending it.
@@ -6737,8 +6745,6 @@ hterm.Keyboard.Bindings.prototype.getBinding = function(keyDown) {
 // Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-lib.rtdep('hterm.Keyboard.KeyActions');
 
 /**
  * The default key map for hterm.
@@ -7019,7 +7025,11 @@ hterm.Keyboard.KeyMap.prototype.reset = function() {
     [221, ']}',    DEFAULT,             ctl(']'),  DEFAULT, DEFAULT],
     [220, '\\|',   DEFAULT,             ctl('\\'), DEFAULT, DEFAULT],
 
-    // Fourth row. (We let Ctrl-Shift-J pass for Chrome DevTools.)
+    // Fourth row. We let Ctrl-Shift-J pass for Chrome DevTools.
+    // To be compliant with xterm's behavior for modifiers on Enter
+    // would mean maximizing the window with Alt-Enter... so we don't
+    // want to do that. Our behavior on Enter is what most other
+    // modern emulators do.
     [20,  '[CAPS]',  PASS,    PASS,                           PASS,    DEFAULT],
     [65,  'aA',      DEFAULT, ctl('A'),                       DEFAULT, DEFAULT],
     [83,  'sS',      DEFAULT, ctl('S'),                       DEFAULT, DEFAULT],
@@ -7032,7 +7042,7 @@ hterm.Keyboard.KeyMap.prototype.reset = function() {
     [76,  'lL',      DEFAULT, sh(ctl('L'), PASS),             DEFAULT, DEFAULT],
     [keycapSC, ';:', DEFAULT, STRIP,                          DEFAULT, DEFAULT],
     [222, '\'"',     DEFAULT, STRIP,                          DEFAULT, DEFAULT],
-    [13,  '[ENTER]', '\r',    CANCEL,                         CANCEL,  DEFAULT],
+    [13,  '[ENTER]', '\r',    DEFAULT,                        DEFAULT, DEFAULT],
 
     // Fifth row.  This includes the copy/paste shortcuts.  On some
     // platforms it's Ctrl-C/V, on others it's Meta-C/V.  We assume either
@@ -7631,8 +7641,6 @@ hterm.Options = function(opt_copy) {
 // Copyright (c) 2015 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-lib.rtdep('hterm.Keyboard.KeyActions');
 
 /**
  * @constructor
@@ -8272,8 +8280,6 @@ hterm.Parser.identifiers.actions = {
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-lib.rtdep('lib.f', 'lib.Storage');
-
 /**
  * PreferenceManager subclass managing global NaSSH preferences.
  *
@@ -8513,6 +8519,14 @@ hterm.PreferenceManager.defaultPreferences = {
       `\n` +
       `A two element array, the first of which is how long the text cursor ` +
       `should be on, second is how long it should be off.`
+  ),
+
+  'cursor-shape': hterm.PreferenceManager.definePref_(
+      'Text cursor shape',
+      hterm.PreferenceManager.categories.Appearance,
+      'BLOCK', ['BLOCK', 'BEAM', 'UNDERLINE'],
+      `The shape of the visible text cursor. This can be toggled at ` +
+      `runtime via terminal escape sequences.`
   ),
 
   'cursor-color': hterm.PreferenceManager.definePref_(
@@ -9123,9 +9137,6 @@ hterm.PubSub.prototype.publish = function(subject, e, opt_lastCallback) {
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-lib.rtdep('lib.f', 'lib.wc',
-          'hterm.RowCol', 'hterm.Size', 'hterm.TextAttributes');
-
 /**
  * @fileoverview This class represents a single terminal screen full of text.
  *
@@ -9728,7 +9739,7 @@ hterm.Screen.prototype.insertString = function(str, wcwidth=undefined) {
 hterm.Screen.prototype.overwriteString = function(str, wcwidth=undefined) {
   var maxLength = this.columnCount_ - this.cursorPosition.column;
   if (!maxLength)
-    return [str];
+    return;
 
   if (wcwidth === undefined)
     wcwidth = lib.wc.strWidth(str);
@@ -10171,8 +10182,6 @@ hterm.Screen.CursorState.prototype.restore = function(vt) {
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-lib.rtdep('lib.f', 'hterm.PubSub', 'hterm.Size');
-
 /**
  * A 'viewport' view of fixed-height rows with support for selection and
  * copy-to-clipboard.
@@ -10266,6 +10275,10 @@ hterm.ScrollPort = function(rowProvider) {
   this.timeouts_ = {};
 
   this.observers_ = {};
+
+  // Offscreen selection rows that are set with 'aria-hidden'.
+  // They must be unset when selection changes or the rows are visible.
+  this.ariaHiddenSelectionRows_ = [];
 
   this.DEBUG_ = false;
 };
@@ -10511,29 +10524,12 @@ hterm.ScrollPort.prototype.paintIframeContents_ = function() {
   }
 
   var style = doc.createElement('style');
-
-  // Hide rows that are above or below the x-fold elements. This is necessary to
-  // ensure that these rows aren't visible to a screen reader. First hide all
-  // rows that are children of the <x-screen>. Then display the nodes that are
-  // after the top fold. Then rehide nodes that are after the bottom fold.
-  style.textContent = `
-      x-row {
-        display: block;
-        height: var(--hterm-charsize-height);
-        line-height: var(--hterm-charsize-height);
-      }
-
-      x-screen x-row {
-        visibility: hidden;
-      }
-
-      #hterm\\:top-fold-for-row-selection ~ x-row {
-        visibility: visible;
-      }
-
-      #hterm\\:bottom-fold-for-row-selection ~ x-row {
-        visibility: hidden;
-      }`;
+  style.textContent = (
+      'x-row {' +
+      '  display: block;' +
+      '  height: var(--hterm-charsize-height);' +
+      '  line-height: var(--hterm-charsize-height);' +
+      '}');
   doc.head.appendChild(style);
 
   this.userCssLink_ = doc.createElement('link');
@@ -10655,11 +10651,7 @@ hterm.ScrollPort.prototype.paintIframeContents_ = function() {
     const accessibilityEnabled = this.accessibilityReader_ &&
         this.accessibilityReader_.accessibilityEnabled;
 
-    const selection = this.document_.getSelection();
-    let selectedElement;
-    if (selection.anchorNode && selection.anchorNode.parentElement) {
-      selectedElement = selection.anchorNode.parentElement;
-    }
+    const selectedElement = this.document_.getSelection().anchorNode;
     if (accessibilityEnabled && selectedElement == this.scrollUpButton_) {
       this.scrollUpButton_.style.top = '0px';
     } else {
@@ -11060,7 +11052,6 @@ hterm.ScrollPort.prototype.measureCharacterSize = function(opt_weight) {
                             rulerSize.height / numberOfLines);
 
   this.ruler_.appendChild(this.rulerBaseline_);
-  size.baseline = this.rulerBaseline_.offsetTop;
   this.ruler_.removeChild(this.rulerBaseline_);
 
   this.rowNodes_.removeChild(this.ruler_);
@@ -11237,6 +11228,7 @@ hterm.ScrollPort.prototype.redraw_ = function() {
   this.drawTopFold_(topRowIndex);
   this.drawBottomFold_(bottomRowIndex);
   this.drawVisibleRows_(topRowIndex, bottomRowIndex);
+  this.ariaHideOffscreenSelectionRows_(topRowIndex, bottomRowIndex);
 
   this.syncRowNodesDimensions_();
 
@@ -11467,6 +11459,36 @@ hterm.ScrollPort.prototype.drawVisibleRows_ = function(
 };
 
 /**
+ * Ensure aria-hidden is set on any selection rows that are offscreen.
+ *
+ * The attribute aria-hidden is set to 'true' so that hidden rows are ignored
+ * by screen readers.  We keep a list of currently hidden rows so they can be
+ * reset each time this function is called as the selection and/or scrolling
+ * may have changed.
+ *
+ * @param {number} topRowIndex Index of top row on screen.
+ * @param {number} bottomRowIndex Index of bottom row on screen.
+ */
+hterm.ScrollPort.prototype.ariaHideOffscreenSelectionRows_ = function(
+    topRowIndex, bottomRowIndex) {
+  // Reset previously hidden selection rows.
+  const hiddenRows = this.ariaHiddenSelectionRows_;
+  let row;
+  while (row = hiddenRows.pop()) {
+    row.removeAttribute('aria-hidden');
+  }
+
+  function checkRow(row) {
+    if (row && (row.rowIndex < topRowIndex || row.rowIndex > bottomRowIndex)) {
+      row.setAttribute('aria-hidden', 'true');
+      hiddenRows.push(row);
+    }
+  }
+  checkRow(this.selection.startRow);
+  checkRow(this.selection.endRow);
+};
+
+/**
  * Empty out both select bags and remove them from the document.
  *
  * These nodes hold the text between the start and end of the selection
@@ -11676,7 +11698,11 @@ hterm.ScrollPort.prototype.onScrollWheel = function(e) {};
 hterm.ScrollPort.prototype.onScrollWheel_ = function(e) {
   this.onScrollWheel(e);
 
-  if (e.defaultPrevented)
+  // Ignore the event if it was already handled (preventDefault was called),
+  // or if it is non-cancelable since preventDefault is ignored for these.
+  // See https://crbug.com/894223 where blink sends non-cancelable touchpad
+  // scrollWheel events.
+  if (e.defaultPrevented || !e.cancelable)
     return;
 
   // Figure out how far this event wants us to scroll.
@@ -12001,11 +12027,6 @@ hterm.ScrollPort.prototype.setScrollWheelMoveMultipler = function(multiplier) {
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-lib.rtdep('lib.colors', 'lib.PreferenceManager', 'lib.resource', 'lib.wc',
-          'lib.f', 'hterm.AccessibilityReader', 'hterm.Keyboard',
-          'hterm.Options', 'hterm.PreferenceManager', 'hterm.Screen',
-          'hterm.ScrollPort', 'hterm.Size', 'hterm.TextAttributes', 'hterm.VT');
-
 /**
  * Constructor for the Terminal class.
  *
@@ -12305,6 +12326,10 @@ hterm.Terminal.prototype.setProfile = function(profileId, opt_callback) {
 
     'cursor-blink': function(v) {
       terminal.setCursorBlink(!!v);
+    },
+
+    'cursor-shape': function(v) {
+      terminal.setCursorShape(v);
     },
 
     'cursor-blink-cycle': function(v) {
@@ -14863,22 +14888,18 @@ hterm.Terminal.prototype.restyleCursor_ = function() {
 
   switch (shape) {
     case hterm.Terminal.cursorShape.BEAM:
-      style.height = 'var(--hterm-charsize-height)';
       style.backgroundColor = 'transparent';
       style.borderBottomStyle = null;
       style.borderLeftStyle = 'solid';
       break;
 
     case hterm.Terminal.cursorShape.UNDERLINE:
-      style.height = this.scrollPort_.characterSize.baseline + 'px';
       style.backgroundColor = 'transparent';
       style.borderBottomStyle = 'solid';
-      // correct the size to put it exactly at the baseline
       style.borderLeftStyle = null;
       break;
 
     default:
-      style.height = 'var(--hterm-charsize-height)';
       style.backgroundColor = 'var(--hterm-cursor-color)';
       style.borderBottomStyle = null;
       style.borderLeftStyle = null;
@@ -14950,7 +14971,7 @@ hterm.Terminal.prototype.showZoomWarning_ = function(state) {
     });
   }
 
-  this.zoomWarningNode_.textContent = lib.MessageManager.replaceReferences(
+  this.zoomWarningNode_.textContent = lib.i18n.replaceReferences(
       hterm.zoomWarningMessage,
       [parseInt(this.scrollPort_.characterSize.zoomFactor * 100)]);
 
@@ -15084,6 +15105,7 @@ hterm.Terminal.prototype.copyStringToClipboard = function(str) {
  * @param {string=} options.uri The source URI for the image.
  * @param {ArrayBuffer=} options.buffer The ArrayBuffer image data.
  * @param {Blob=} options.blob The Blob image data.
+ * @param {string=} options.type The MIME type of the image data.
  * @param {function=} onLoad Callback when loading finishes.
  * @param {function(Event)=} onError Callback when loading fails.
  */
@@ -15096,6 +15118,20 @@ hterm.Terminal.prototype.displayImage = function(options, onLoad, onError) {
   // Set up the defaults to simplify code below.
   if (!options.name)
     options.name = '';
+
+  // See if the mime type is available.  If not, guess from the filename.
+  // We don't list all possible mime types because the browser can usually
+  // guess it correctly.  So list the ones that need a bit more help.
+  if (!options.type) {
+    const ary = options.name.split('.');
+    const ext = ary[ary.length - 1].trim();
+    switch (ext) {
+      case 'svg':
+      case 'svgz':
+        options.type = 'image/svg+xml';
+        break;
+    }
+  }
 
   // Has the user approved image display yet?
   if (this.allowImagesInline !== true) {
@@ -15164,9 +15200,10 @@ hterm.Terminal.prototype.displayImage = function(options, onLoad, onError) {
     if (options.uri !== undefined) {
       img.src = options.uri;
     } else if (options.buffer !== undefined) {
-      const blob = new Blob([options.buffer]);
+      const blob = new Blob([options.buffer], {type: options.type});
       img.src = URL.createObjectURL(blob);
     } else {
+      const blob = new Blob([options.blob], {type: options.type});
       img.src = URL.createObjectURL(options.blob);
     }
     img.title = img.alt = options.name;
@@ -15790,8 +15827,6 @@ hterm.Terminal.prototype.onScrollportFocus_ = function() {
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-lib.rtdep('lib.encodeUTF8');
-
 /**
  * Input/Output interface used by commands to communicate with the terminal.
  *
@@ -15821,6 +15856,9 @@ hterm.Terminal.IO = function(terminal) {
 
   // Any data this object accumulated while not active.
   this.buffered_ = '';
+
+  // Decoder to maintain UTF-8 decode state.
+  this.textDecoder_ = new TextDecoder();
 };
 
 /**
@@ -15968,6 +16006,45 @@ hterm.Terminal.IO.prototype.onTerminalResize = function(width, height) {
  * @param {string} string The UTF-8 encoded string to print.
  */
 hterm.Terminal.IO.prototype.writeUTF8 = function(string) {
+  // We can't use instanceof here on string to see if it's an ArrayBuffer as it
+  // might be constructed in a different runtime context whose ArrayBuffer was
+  // not the same.  See https://crbug.com/930171#5 for more details.
+  if (typeof string == 'string') {
+    if (this.terminal_.characterEncoding != 'raw') {
+      const bytes = lib.codec.stringToCodeUnitArray(string, Uint8Array);
+      string = this.textDecoder_.decode(bytes, {stream: true});
+    }
+  } else {
+    // Handle array buffers & typed arrays by normalizing into a typed array.
+    const u8 = new Uint8Array(string);
+    if (this.terminal_.characterEncoding == 'raw') {
+      string = lib.codec.codeUnitArrayToString(u8);
+    } else {
+      string = this.textDecoder_.decode(u8, {stream: true});
+    }
+  }
+
+  this.print(string);
+};
+
+/**
+ * Write a UTF-8 encoded byte string to the terminal followed by crlf.
+ *
+ * @param {string} string The UTF-8 encoded string to print.
+ */
+hterm.Terminal.IO.prototype.writelnUTF8 = function(string) {
+  this.writeUTF8(string);
+  // We need to use writeUTF8 to make sure we flush the decoder state.
+  this.writeUTF8('\r\n');
+};
+
+/**
+ * Write a UTF-16 JavaScript string to the terminal.
+ *
+ * @param {string} string The string to print.
+ */
+hterm.Terminal.IO.prototype.print =
+hterm.Terminal.IO.prototype.writeUTF16 = function(string) {
   // If another process has the foreground IO, buffer new data sent to this IO
   // (since it's in the background).  When we're made the foreground IO again,
   // we'll flush everything.
@@ -15980,39 +16057,18 @@ hterm.Terminal.IO.prototype.writeUTF8 = function(string) {
 };
 
 /**
- * Write a UTF-8 encoded byte string to the terminal followed by crlf.
- *
- * @param {string} string The UTF-8 encoded string to print.
- */
-hterm.Terminal.IO.prototype.writelnUTF8 = function(string) {
-  this.writeUTF8(string + '\r\n');
-};
-
-/**
- * Write a UTF-16 JavaScript string to the terminal.
- *
- * @param {string} string The string to print.
- */
-hterm.Terminal.IO.prototype.print =
-hterm.Terminal.IO.prototype.writeUTF16 = function(string) {
-  this.writeUTF8(lib.encodeUTF8(string));
-};
-
-/**
  * Print a UTF-16 JavaScript string to the terminal followed by a newline.
  *
  * @param {string} string The string to print.
  */
 hterm.Terminal.IO.prototype.println =
 hterm.Terminal.IO.prototype.writelnUTF16 = function(string) {
-  this.writelnUTF8(lib.encodeUTF8(string));
+  this.print(string + '\r\n');
 };
 // SOURCE FILE: hterm/js/hterm_text_attributes.js
 // Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-lib.rtdep('lib.colors');
 
 /**
  * Constructor for TextAttribute objects.
@@ -16086,12 +16142,12 @@ hterm.TextAttributes.prototype.enableBoldAsBright = true;
 /**
  * A sentinel constant meaning "whatever the default color is in this context".
  */
-hterm.TextAttributes.prototype.DEFAULT_COLOR = lib.f.createEnum('');
+hterm.TextAttributes.prototype.DEFAULT_COLOR = Symbol('DEFAULT_COLOR');
 
 /**
  * A constant string used to specify that source color is context default.
  */
-hterm.TextAttributes.prototype.SRC_DEFAULT = 'default';
+hterm.TextAttributes.prototype.SRC_DEFAULT = Symbol('SRC_DEFAULT');
 
 /**
  * The document object which should own the DOM nodes created by this instance.
@@ -16243,7 +16299,7 @@ hterm.TextAttributes.prototype.createContainer = function(opt_textContent) {
     textDecorationLine += ' underline';
     style.textDecorationStyle = this.underline;
   }
-  if (this.underlineSource != this.SRC_DEFAULT)
+  if (this.underlineColor != this.DEFAULT_COLOR)
     style.textDecorationColor = this.underlineColor;
   if (this.strikethrough) {
     textDecorationLine += ' line-through';
@@ -16308,9 +16364,12 @@ hterm.TextAttributes.prototype.matchesContainer = function(obj) {
           this.asciiNode == obj.asciiNode &&
           !(this.tileData != null || obj.tileNode) &&
           this.uriId == obj.uriId &&
-          this.foreground == style.color &&
-          this.background == style.backgroundColor &&
-          this.underlineColor == style.textDecorationColor &&
+          (this.foreground == this.DEFAULT_COLOR &&
+           style.color == '') &&
+          (this.background == this.DEFAULT_COLOR &&
+           style.backgroundColor == '') &&
+          (this.underlineColor == this.DEFAULT_COLOR &&
+           style.textDecorationColor == '') &&
           (this.enableBold && this.bold) == !!style.fontWeight &&
           this.blink == !!obj.blinkNode &&
           this.italic == !!style.fontStyle &&
@@ -16394,7 +16453,7 @@ hterm.TextAttributes.prototype.syncColors = function() {
     this.foreground = this.background;
 
   if (this.underlineSource == this.SRC_DEFAULT)
-    this.underlineColor = '';
+    this.underlineColor = this.DEFAULT_COLOR;
   else if (Number.isInteger(this.underlineSource))
     this.underlineColor = this.colorPalette[this.underlineSource];
   else
@@ -16510,53 +16569,52 @@ hterm.TextAttributes.nodeSubstring = function(node, start, end) {
  *     only ASCII content, its asciiNode property is set to true.
  */
 hterm.TextAttributes.splitWidecharString = function(str) {
-  var rv = [];
-  var base = 0, length = 0, wcStrWidth = 0, wcCharWidth;
-  var asciiNode = true;
+  const asciiRegex = new RegExp('^[\u0020-\u007f]*$');
 
-  for (var i = 0; i < str.length;) {
-    var c = str.codePointAt(i);
-    var increment;
-    if (c < 128) {
-      wcStrWidth += 1;
-      length += 1;
-      increment = 1;
-    } else {
-      increment = (c <= 0xffff) ? 1 : 2;
-      wcCharWidth = lib.wc.charWidth(c);
-      if (wcCharWidth <= 1) {
-        wcStrWidth += wcCharWidth;
-        length += increment;
-        asciiNode = false;
-      } else {
-        if (length) {
-          rv.push({
-            str: str.substr(base, length),
-            asciiNode: asciiNode,
-            wcStrWidth: wcStrWidth,
-          });
-          asciiNode = true;
-          wcStrWidth = 0;
-        }
-        rv.push({
-          str: str.substr(i, increment),
-          wcNode: true,
-          asciiNode: false,
-          wcStrWidth: 2,
-        });
-        base = i + increment;
-        length = 0;
-      }
-    }
-    i += increment;
+  // Optimize for printable ASCII.  This should only take ~1ms/MB, but cuts out
+  // 40ms+/MB when true.  If we're dealing with UTF8, then it's already slow.
+  if (asciiRegex.test(str)) {
+    return [{
+      str: str,
+      wcNode: false,
+      asciiNode: true,
+      wcStrWidth: str.length,
+    }];
   }
 
-  if (length) {
-    rv.push({
-      str: str.substr(base, length),
-      asciiNode: asciiNode,
-      wcStrWidth: wcStrWidth,
-    });
+  // Iterate over each grapheme and merge them together in runs of similar
+  // strings.  We want to keep narrow and wide characters separate, and the
+  // fewer overall segments we have, the faster we'll be as processing each
+  // segment in the terminal print code is a bit slow.
+  const segmenter = new Intl.Segmenter(undefined, {type: 'grapheme'});
+  const it = segmenter.segment(str);
+
+  const rv = [];
+  let segment = it.next();
+  while (!segment.done) {
+    const grapheme = segment.value.segment;
+    const isAscii = asciiRegex.test(grapheme);
+    const strWidth = isAscii ? 1 : lib.wc.strWidth(grapheme);
+    const isWideChar =
+        isAscii ? false : (lib.wc.charWidth(grapheme.codePointAt(0)) == 2);
+
+    // Only merge non-wide characters together.  Every wide character needs to
+    // be separate so it can get a unique container.
+    const prev = rv[rv.length - 1];
+    if (prev && !isWideChar && !prev.wcNode) {
+      prev.str += grapheme;
+      prev.wcStrWidth += strWidth;
+      prev.asciiNode = prev.asciiNode && isAscii;
+    } else {
+      rv.push({
+        str: grapheme,
+        wcNode: isWideChar,
+        asciiNode: isAscii,
+        wcStrWidth: strWidth,
+      });
+    }
+
+    segment = it.next();
   }
 
   return rv;
@@ -16565,9 +16623,6 @@ hterm.TextAttributes.splitWidecharString = function(str) {
 // Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-lib.rtdep('lib.colors', 'lib.f', 'lib.UTF8Decoder',
-          'hterm.VT.CharacterMap');
 
 /**
  * Constructor for the VT escape sequence interpreter.
@@ -16613,9 +16668,6 @@ hterm.VT = function(terminal) {
 
   // The amount of time we're willing to wait for the end of an OSC sequence.
   this.oscTimeLimit_ = 20000;
-
-  // Decoder to maintain UTF-8 decode state.
-  this.utf8Decoder_ = new lib.UTF8Decoder();
 
   /**
    * Whether to accept the 8-bit control characters.
@@ -16962,7 +17014,10 @@ hterm.VT.prototype.onTerminalMouse_ = function(e) {
   // X & Y coordinate reporting.
   let x;
   let y;
-  let limit = 255;
+  // Normally X10 has a limit of 255, but since we only want to emit UTF-8 valid
+  // streams, we limit ourselves to 127 to avoid setting the 8th bit.  If we do
+  // re-enable this, we should re-enable the hterm_vt_tests.js too.
+  let limit = 127;
   switch (this.mouseCoordinates) {
     case this.MOUSE_COORDINATES_UTF8:
       // UTF-8 mode is the same as X10 but with higher limits.
@@ -17089,7 +17144,7 @@ hterm.VT.prototype.onTerminalMouse_ = function(e) {
  * The buffer will be decoded according to the 'receive-encoding' preference.
  */
 hterm.VT.prototype.interpret = function(buf) {
-  this.parseState_.resetBuf(this.decode(buf));
+  this.parseState_.resetBuf(buf);
 
   while (!this.parseState_.isComplete()) {
     var func = this.parseState_.func;
@@ -17103,32 +17158,6 @@ hterm.VT.prototype.interpret = function(buf) {
       throw 'Parser did not alter the state!';
     }
   }
-};
-
-/**
- * Decode a string according to the 'receive-encoding' preference.
- */
-hterm.VT.prototype.decode = function(str) {
-  if (this.characterEncoding == 'utf-8')
-    return this.decodeUTF8(str);
-
-  return str;
-};
-
-/**
- * Encode a UTF-16 string as UTF-8.
- *
- * See also: https://en.wikipedia.org/wiki/UTF-16
- */
-hterm.VT.prototype.encodeUTF8 = function(str) {
-  return lib.encodeUTF8(str);
-};
-
-/**
- * Decode a UTF-8 string into UTF-16.
- */
-hterm.VT.prototype.decodeUTF8 = function(str) {
-  return this.utf8Decoder_.decode(str);
 };
 
 /**
@@ -17944,7 +17973,7 @@ hterm.VT.ESC[']'] = function(parseState) {
     }
 
     // We're done.
-    var ary = parseState.args[0].match(/^(\d+);(.*)$/);
+    var ary = parseState.args[0].match(/^(\d+);?(.*)$/);
     if (ary) {
       parseState.args[0] = ary[2];
       this.dispatch('OSC', ary[1], parseState);
@@ -18464,9 +18493,20 @@ hterm.VT.OSC['52'] = function(parseState) {
   if (!args)
     return;
 
-  var data = window.atob(args[1]);
+  let data;
+  try {
+    data = window.atob(args[1]);
+  } catch (e) {
+    // If the user sent us invalid base64 content, silently ignore it.
+    return;
+  }
+  if (this.characterEncoding == 'utf-8') {
+    const decoder = new TextDecoder();
+    const bytes = lib.codec.stringToCodeUnitArray(data, Uint8Array);
+    data = decoder.decode(bytes);
+  }
   if (data)
-    this.terminal.copyStringToClipboard(this.decode(data));
+    this.terminal.copyStringToClipboard(data);
 };
 
 /**
@@ -18531,6 +18571,7 @@ hterm.VT.OSC['1337'] = function(parseState) {
     width: 'auto',
     height: 'auto',
     align: 'left',
+    type: '',
     buffer: lib.codec.stringToCodeUnitArray(atob(args[2]), Uint8Array).buffer,
   };
   // Walk the "key=value;" sets.
@@ -18567,6 +18608,9 @@ hterm.VT.OSC['1337'] = function(parseState) {
       case 'align':
         options.align = kv[2];
         break;
+      case 'type':
+        options.type = kv[2];
+        break;
       default:
         // Ignore unknown keys.  Don't want remote stuffing our JS env.
         break;
@@ -18582,7 +18626,7 @@ hterm.VT.OSC['1337'] = function(parseState) {
     const queued = parseState.peekRemainingBuf();
     parseState.advance(queued.length);
     this.terminal.displayImage(options);
-    io.writeUTF8(queued);
+    io.print(queued);
   } else
     this.terminal.displayImage(options);
 };
@@ -19535,8 +19579,6 @@ hterm.VT.CSI['\'~'] = hterm.VT.ignore;
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-lib.rtdep('lib.f');
-
 /**
  * Character map object.
  *
@@ -20184,18 +20226,18 @@ lib.resource.add('hterm/images/icon-96', 'image/png;base64',
 );
 
 lib.resource.add('hterm/concat/date', 'text/plain',
-'Mon, 17 Jun 2019 16:59:40 +0000'
+'Tue, 18 Jun 2019 13:12:31 +0000'
 );
 
 lib.resource.add('hterm/changelog/version', 'text/plain',
-'1.84'
+'1.85'
 );
 
 lib.resource.add('hterm/changelog/date', 'text/plain',
-'2019-01-19'
+'2019-06-17'
 );
 
 lib.resource.add('hterm/git/HEAD', 'text/plain',
-'231ff3d044f0fb40bb205265c772f4caff141aae'
+'530691a7e349cc0038ef14f1eb2a7c6ce8971e73'
 );
 

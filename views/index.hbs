@@ -5,7 +5,7 @@
   <title>Shell</title>
   <link rel="stylesheet" href="{{baseURI}}/stylesheets/style.css">
 
-  <script src="{{baseURI}}/javascripts/hterm_all_1.84.js"></script>
+  <script src="{{baseURI}}/javascripts/hterm_all_1.85.js"></script>
   <script src="{{baseURI}}/javascripts/ood_shell.js"></script>
 </head>
 
@@ -25,15 +25,13 @@
         'ctrl-c-copy': true
       };
 
-    // hterm default preferences are defined here:
-    // https://chromium.googlesource.com/apps/libapps/+/c277f0aa4c194dae2619e874b74803094e13d1bc/hterm/js/hterm_preference_manager.js#53
-
- 
+    // hterm default preferences are defined here. master is always a valid link, but check the tag that we're currently on
+    // https://chromium.googlesource.com/apps/libapps/+/master/hterm/js/hterm_preference_manager.js
+    
     oodShell = new OodShell(terminalContainer, webSocketUrl, terminalPrefs);
     oodShell.createTerminal();
   }
 
-  
   window.onload = function() {
     lib.init(initShell);
   };
