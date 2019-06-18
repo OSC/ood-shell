@@ -35,7 +35,7 @@ OodShell.prototype.createTerminal = function () {
     io.onTerminalResize = that.onTerminalResize.bind(that);
     
     that.socket = new WebSocket(that.url);  // WS isn't made or bound until terminal is ready
-    //that.socket.onopen    = nothing left to do, no onopen callback bc the WS is the last thing to init
+    that.socket.onopen    = that.useCachedSize.bind(that); //we've been caching the term size while connecting
     that.socket.onmessage = that.getMessage.bind(that);
     that.socket.onclose   = that.closeTerminal.bind(that);
     
@@ -110,7 +110,14 @@ OodShell.prototype.onTerminalResize = function (columns, rows) {
       }
     }));
   }else{
-      setTimeout(this.onTerminalResize(columns, rows), 100); // try again in 100 ms bc we have to resize
+      this.cachedCols = columns;
+      this.cachedRows = rows;
   }
 
+};
+
+OodShell.prototype.useCachedSize = function() {
+  if(this.cachedCols && this.cachedRows) {
+    this.onTerminalResize(this.cachedCols, this.cachedRows);
+  }
 };
