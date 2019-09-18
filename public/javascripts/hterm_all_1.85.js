@@ -5330,7 +5330,7 @@ hterm.AccessibilityReader.prototype.setAccessibilityEnabled =
  * @param {HTMLDocument} doc The document where the <x-screen> resides.
  */
 hterm.AccessibilityReader.prototype.decorate = function(doc) {
-  const handlers = ['keydown', 'keypress', 'keyup', 'textInput'];
+  const handlers = ['keydown', 'keypress', 'keyup', 'textInput', 'touchstart', 'touchend', 'touchmove'];
   handlers.forEach((handler) => {
     doc.addEventListener(handler, () => { this.hasUserGesture = true; });
   });
@@ -5707,6 +5707,10 @@ hterm.ContextMenu.prototype.regenerate_ = function() {
         e.preventDefault();
         action(e);
       });
+      menuitem.addEventListener('touchstart', function(e) {
+      e.preventDefault();
+      action(e);
+      });
     }
     this.element_.appendChild(menuitem);
   });
@@ -5915,6 +5919,32 @@ hterm.Frame.prototype.postMessage = function(name, argv) {
   this.messageChannel_.port1.postMessage({name: name, argv: argv});
 };
 
+
+   //Checks to see if we are on a touchscreen device.
+    function is_touch_device() {
+  var prefixes = ' -webkit- -moz- -o- -ms- '.split(' ');
+  var mq = function(query) {
+    return window.matchMedia(query).matches;
+  }
+
+  if (('ontouchstart' in window) || window.DocumentTouch && document instanceof DocumentTouch) {
+    return true;
+  }
+
+  // include the 'heartz' as a way to have a non matching MQ to help terminate the join
+  // https://git.io/vznFH
+  var query = ['(', prefixes.join('touch-enabled),('), 'heartz', ')'].join('');
+  return mq(query);
+}
+  //store touch device bool result.
+  var touchDevice = is_touch_device();
+  var clickOrTouch;
+  if (touchDevice === true) {
+    clickOrTouch = "touchstart";
+  } else if (touchDevice === false) {
+    clickOrTouch = "click";
+  }
+
 /**
  * Show the UI for this frame.
  *
@@ -5938,6 +5968,8 @@ hterm.Frame.prototype.show = function() {
   }
 
   var headerHeight = '16px';
+
+ 
 
   var divSize = hterm.getClientSize(this.div_);
 
@@ -5982,7 +6014,9 @@ hterm.Frame.prototype.show = function() {
         'margin-right: 3px;' +
         'cursor: pointer;');
     button.textContent = '\u2a2f';
-    button.addEventListener('click', this.onCloseClicked_.bind(this));
+
+    button.addEventListener("click", this.onCloseClicked_.bind(this));
+    button.addEventListener("touchstart", this.onCloseClicked_.bind(this));
     header.appendChild(button);
   }
 
@@ -10634,6 +10668,7 @@ hterm.ScrollPort.prototype.paintIframeContents_ = function() {
   this.scrollUpButton_.style.cssText = scrollButtonStyle;
   this.scrollUpButton_.style.top = -scrollButtonTotalHeight + 'px';
   this.scrollUpButton_.addEventListener('click', this.scrollPageUp.bind(this));
+  this.scrollUpButton_.addEventListener('touchstart', this.scrollPageUp.bind(this));
 
   this.scrollDownButton_ = this.document_.createElement('div');
   this.scrollDownButton_.id = 'hterm:a11y:page-down';
@@ -10644,6 +10679,8 @@ hterm.ScrollPort.prototype.paintIframeContents_ = function() {
   this.scrollDownButton_.style.bottom = -scrollButtonTotalHeight + 'px';
   this.scrollDownButton_.addEventListener(
       'click', this.scrollPageDown.bind(this));
+    this.scrollDownButton_.addEventListener(
+      'touchstart', this.scrollPageDown.bind(this));
 
   // We only allow the scroll buttons to display after a delay, otherwise the
   // page up button can flash onto the screen during the intial change in focus.
@@ -13518,6 +13555,10 @@ hterm.Terminal.prototype.setupScrollPort_ = function() {
   screenNode.addEventListener('mousedown', onMouse);
   screenNode.addEventListener('mouseup', onMouse);
   screenNode.addEventListener('mousemove', onMouse);
+  screenNode.addEventListener('touchstart', onMouse);
+  screenNode.addEventListener('touchend', onMouse);
+  screenNode.addEventListener('touchmove', onMouse);
+
   this.scrollPort_.onScrollWheel = onMouse;
 
   screenNode.addEventListener('keydown', this.onKeyboardActivity_.bind(this));
@@ -13527,6 +13568,10 @@ hterm.Terminal.prototype.setupScrollPort_ = function() {
   // Listen for mousedown events on the screenNode as in FF the focus
   // events don't bubble.
   screenNode.addEventListener('mousedown', function() {
+    setTimeout(this.onFocusChange_.bind(this, true));
+  }.bind(this));
+
+    screenNode.addEventListener('touchstart', function() {
     setTimeout(this.onFocusChange_.bind(this, true));
   }.bind(this));
 
@@ -13640,7 +13685,7 @@ hterm.Terminal.prototype.setupScrollPort_ = function() {
   this.document_.body.appendChild(this.scrollBlockerNode_);
 
   this.scrollPort_.onScrollWheel = onMouse;
-  ['mousedown', 'mouseup', 'mousemove', 'click', 'dblclick',
+  ['mousedown', 'mouseup', 'mousemove', 'click', 'dblclick', 'touchstart', 'touchmove', 'touchend',
    ].forEach(function(event) {
        this.scrollBlockerNode_.addEventListener(event, onMouse);
        this.cursorNode_.addEventListener(event, onMouse);
@@ -13648,6 +13693,10 @@ hterm.Terminal.prototype.setupScrollPort_ = function() {
      }.bind(this));
 
   this.cursorNode_.addEventListener('mousedown', function() {
+      setTimeout(this.focus.bind(this));
+    }.bind(this));
+
+  this.cursorNode_.addEventListener('touchstart', function() {
       setTimeout(this.focus.bind(this));
     }.bind(this));
 
@@ -14978,7 +15027,12 @@ hterm.Terminal.prototype.showZoomWarning_ = function(state) {
     this.zoomWarningNode_.addEventListener('click', function(e) {
       this.parentNode.removeChild(this);
     });
+
+        this.zoomWarningNode_.addEventListener('touchstart', function(e) {
+      this.parentNode.removeChild(this);
+    });
   }
+
 
   this.zoomWarningNode_.textContent = lib.i18n.replaceReferences(
       hterm.zoomWarningMessage,
@@ -15025,6 +15079,11 @@ hterm.Terminal.prototype.showOverlay = function(msg, opt_timeout) {
         '-moz-transition: opacity 180ms ease-in;');
 
     this.overlayNode_.addEventListener('mousedown', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }, true);
+
+      this.overlayNode_.addEventListener('touchstart', function(e) {
       e.preventDefault();
       e.stopPropagation();
     }, true);
@@ -15169,6 +15228,9 @@ hterm.Terminal.prototype.displayImage = function(options, onLoad, onError) {
     button.addEventListener('click', () => {
       this.prefs_.set('allow-images-inline', false);
     });
+        button.addEventListener('touchstart', () => {
+      this.prefs_.set('allow-images-inline', false);
+    });
     span.appendChild(button);
     button = this.document_.createElement('span');
     button.innerText = hterm.msg('BUTTON_ALLOW_SESSION', [],
@@ -15179,6 +15241,9 @@ hterm.Terminal.prototype.displayImage = function(options, onLoad, onError) {
     button.addEventListener('click', () => {
       this.allowImagesInline = true;
     });
+      button.addEventListener('touchstart', () => {
+      this.allowImagesInline = true;
+    });
     span.appendChild(button);
     button = this.document_.createElement('span');
     button.innerText = hterm.msg('BUTTON_ALLOW_ALWAYS', [], 'always allow');
@@ -15186,6 +15251,9 @@ hterm.Terminal.prototype.displayImage = function(options, onLoad, onError) {
     button.style.borderWidth = '1px';
     button.style.borderStyle = 'solid';
     button.addEventListener('click', () => {
+      this.prefs_.set('allow-images-inline', true);
+    });
+     button.addEventListener('touchstart', () => {
       this.prefs_.set('allow-images-inline', true);
     });
     span.appendChild(button);
@@ -16337,6 +16405,7 @@ hterm.TextAttributes.prototype.createContainer = function(opt_textContent) {
     span.uriId = this.uriId;
     span.title = this.uri;
     span.addEventListener('click', hterm.openUrl.bind(this, this.uri));
+    span.addEventListener('touchstart', hterm.openUrl.bind(this, this.uri));
   }
 
   if (classes.length)
