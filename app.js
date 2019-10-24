@@ -28,8 +28,7 @@ var terminals = {
 
   },
 
-  create: function() {
-      var host = process.env.DEFAULT_SSHHOST || 'localhost';
+  create: function(host) {
       var dir;
       var term;
       var cmd, args;
@@ -117,6 +116,7 @@ var server = new http.createServer(app);
 var wss = new WebSocket.Server({ server: server });
 
 wss.on('connection', function connection (ws) {
+  var host = process.env.DEFAULT_SSHHOST || 'localhost';
   var match;
 
 
@@ -129,7 +129,7 @@ wss.on('connection', function connection (ws) {
   }
 
   if (terminals.exists() === false) {
-    terminals.create();
+    terminals.create(host);
   }
   
   terminals.attach(uuid, ws);
