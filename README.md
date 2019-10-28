@@ -47,7 +47,7 @@ the `ood` account, this app should run as `ood`.
 2.  Update the app:
 
     ```sh
-    scl enable rh-git29 rh-ruby24 rh-nodejs6 -- bin/setup
+    scl enable rh-git29 rh-ruby24 rh-nodejs10 -- bin/setup
     ```
 
 3.  Copy the built app directory to the deployment directory:
