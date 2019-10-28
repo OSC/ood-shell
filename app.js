@@ -24,19 +24,24 @@ if (fs.existsSync('.env')) {
 
 //Create terminals object
 var terminals = {
+  
+  //Object that keeps track of terminal that is open
   instances: {
 
   },
 
+  //Creates a terminal when one is not present
   create: function(host) {
       var dir;
       var term;
       var cmd, args;
       
+      //Generates random uuid to save as a key-value pair for terminal
       uuid = uuidv4();
       cmd = 'ssh';
       args = dir ? [host, '-t', 'cd \'' + dir.replace(/\'/g, "'\\''") + '\' ; exec ${SHELL} -l'] : [host];
 
+      //Assigns the uuid to the terminal instance
       this.instances[uuid] = pty.spawn(cmd, args, {
         name: 'xterm-256color',
         cols: 80,
@@ -46,6 +51,7 @@ var terminals = {
       return uuid;
   },
 
+  //checks if uuid is already present in the instances object
   exists: function() {
     if (uuid in this.instances) {
       return true;
@@ -54,10 +60,12 @@ var terminals = {
     }
   },
 
+  //gets the terminal associated with the uuid and returns it
   get: function(uuid) {
     return this.instances[uuid];
   },
 
+  //attaches the terminal to the websocket for communication
   attach: function(uuid, ws) {
     var term = this.get(uuid);
 
