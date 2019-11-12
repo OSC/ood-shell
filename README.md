@@ -1,3 +1,5 @@
+## Moved to https://github.com/OSC/ondemand/tree/master/apps/shell
+
 # OOD Shell
 
 ![GitHub Release](https://img.shields.io/github/release/osc/ood-shell.svg)
