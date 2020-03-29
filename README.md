@@ -1,4 +1,4 @@
-## Moved to https://github.com/OSC/ondemand/tree/master/apps/shell
+## This is the Shell app for OnDemand 1.6. Future development has been moved to https://github.com/OSC/ondemand/tree/master/apps/shell
 
 # OOD Shell
 
