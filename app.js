@@ -76,8 +76,6 @@ wss.on('connection', function connection (ws, req) {
 
   args = dir ? [host, '-t', 'cd \'' + dir.replace(/\'/g, "'\\''") + '\' ; exec ${SHELL} -l'] : [host];
 
-  process.env.LANG = 'en_US.UTF-8'; // this patch (from osc/ondemand@b996d36) lost when removing wetty (osc/ondemand@2c8a022)
-
   term = pty.spawn(cmd, args, {
     name: 'xterm-256color',
     cols: 80,
