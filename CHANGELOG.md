@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [1.5.0] - 2020-03-30
+### Fixed
+- Add CSRF protection via CSRF token and Origin checking when creating shell app
+  websocket connection [#444](https://github.com/OSC/ondemand/commit/1816de76fdf8bcec21d5f9619f5a3a09ff8db01d)
+  backported to OnDemand 1.6 [#77](https://github.com/OSC/ood-shell/pull/77)
+- Switch to yarn for dependency management
+- Update dependencies
+
+### Added
+- Configurable SSH Wrapper for Shell app @baverhey [#406](https://github.com/OSC/ondemand/pull/406)
+  backported to OnDemand 1.6 [#77](https://github.com/OSC/ood-shell/pull/77)
+
 ## [1.4.8] - 2019-10-09
 ### Changed
 - revert previous fix and now omit `cwd` from spawn all the time. Since we only ssh now,
@@ -82,7 +94,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - Warn users if they try to close an active terminal.
 - Warn users when their websocket connection is terminated.
 
-[Unreleased]: https://github.com/OSC/ood-shell/compare/v1.4.8...HEAD
+[Unreleased]: https://github.com/OSC/ood-shell/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/OSC/ood-shell/compare/v1.4.8...v1.5.0
 [1.4.7]: https://github.com/OSC/ood-shell/compare/v1.4.7...v1.4.8
 [1.4.7]: https://github.com/OSC/ood-shell/compare/v1.4.6...v1.4.7
 [1.4.6]: https://github.com/OSC/ood-shell/compare/v1.4.5...v1.4.6
