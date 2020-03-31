@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [1.5.1] - 2020-03-30
+### Fixed
+- downgrade node-pty dependency to version that is compatible with nodejs6
+
 ## [1.5.0] - 2020-03-30
 ### Fixed
 - Add CSRF protection via CSRF token and Origin checking when creating shell app
@@ -94,7 +98,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - Warn users if they try to close an active terminal.
 - Warn users when their websocket connection is terminated.
 
-[Unreleased]: https://github.com/OSC/ood-shell/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/OSC/ood-shell/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/OSC/ood-shell/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/OSC/ood-shell/compare/v1.4.8...v1.5.0
 [1.4.8]: https://github.com/OSC/ood-shell/compare/v1.4.7...v1.4.8
 [1.4.7]: https://github.com/OSC/ood-shell/compare/v1.4.6...v1.4.7
