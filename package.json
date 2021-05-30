@@ -21,7 +21,7 @@
     "minimist": ">=1.2.2",
     "node-pty": "^0.8.1",
     "whatwg-url": "^7.0.0",
-    "ws": "6.2.1"
+    "ws": "7.4.6"
   },
   "private": true,
   "resolutions": {
